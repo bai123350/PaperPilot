@@ -2,6 +2,22 @@
 
 PaperPilot is an evidence-first biomedical research intelligence workspace for individual researchers. It turns a structured research question and optional private PDFs into an auditable progress report, evidence records, research gaps, and three testable next-step proposals.
 
+## Interface preview
+
+### Evidence-linked report
+
+The desktop report keeps claims, research gaps, three next-step proposals, and the supporting Evidence Record in one auditable workspace.
+
+![PaperPilot desktop research report with the evidence drawer open](docs/images/paperpilot-report-desktop.png)
+
+### Responsive report reader
+
+The same evidence workflow adapts to mobile screens with a fixed bottom navigation and a full-width evidence drawer.
+
+<p align="center">
+  <img src="docs/images/paperpilot-report-mobile.png" alt="PaperPilot mobile research report with the evidence drawer open" width="360" />
+</p>
+
 ## Local development
 
 Prerequisites: Python 3.10+, Node.js 22+, npm, and `uv`.
