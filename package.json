@@ -1,0 +1,13 @@
+{
+  "name": "paperpilot",
+  "private": true,
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace @paperpilot/web",
+    "build": "npm run build --workspace @paperpilot/web",
+    "test": "npm run test --workspace @paperpilot/web",
+    "test:e2e": "npm run test:e2e --workspace @paperpilot/web"
+  }
+}

@@ -1,0 +1,89 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: paperpilot
+      POSTGRES_USER: paperpilot
+      POSTGRES_PASSWORD: paperpilot
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperpilot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./services/api
+    command: sh -c "alembic upgrade head && uvicorn paperpilot.api.app:app --host 0.0.0.0 --port 8000"
+    environment: &api-environment
+      PAPERPILOT_ENV: production
+      PAPERPILOT_AUTO_CREATE_SCHEMA: "false"
+      PAPERPILOT_DATABASE_URL: postgresql+psycopg://paperpilot:paperpilot@db:5432/paperpilot
+      PAPERPILOT_REDIS_URL: redis://redis:6379/0
+      PAPERPILOT_WEB_ORIGIN: http://localhost:3000
+      PAPERPILOT_DEMO_MODE: "true"
+      PAPERPILOT_TASK_ALWAYS_EAGER: "false"
+      PAPERPILOT_STORAGE_BACKEND: local
+      PAPERPILOT_STORAGE_PATH: /data/uploads
+      PAPERPILOT_GROBID_URL: http://grobid:8070
+      PAPERPILOT_AUTH_SECRET: change-this-before-deploying
+    volumes:
+      - uploads:/data/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  worker:
+    build: ./services/api
+    command: celery -A paperpilot.tasks.celery_app worker --loglevel=INFO --queues=research
+    environment: *api-environment
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  beat:
+    build: ./services/api
+    command: celery -A paperpilot.tasks.celery_app beat --loglevel=INFO
+    environment: *api-environment
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      redis: { condition: service_healthy }
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  grobid:
+    image: lfoppiano/grobid:0.8.1
+    profiles: ["fulltext"]
+    ports:
+      - "8070:8070"
+
+volumes:
+  postgres-data:
+  redis-data:
+  uploads:

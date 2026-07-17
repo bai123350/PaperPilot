@@ -1,0 +1,10 @@
+.git
+.venv
+.uv-cache
+node_modules
+**/.next
+**/__pycache__
+*.db
+uploads
+test-results
+playwright-report
