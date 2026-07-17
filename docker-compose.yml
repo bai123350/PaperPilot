@@ -34,11 +34,15 @@ services:
       PAPERPILOT_REDIS_URL: redis://redis:6379/0
       PAPERPILOT_WEB_ORIGIN: http://localhost:3000
       PAPERPILOT_DEMO_MODE: "true"
+      PAPERPILOT_LOCAL_AUTH_ENABLED: "false"
       PAPERPILOT_TASK_ALWAYS_EAGER: "false"
       PAPERPILOT_STORAGE_BACKEND: local
       PAPERPILOT_STORAGE_PATH: /data/uploads
       PAPERPILOT_GROBID_URL: http://grobid:8070
       PAPERPILOT_AUTH_SECRET: change-this-before-deploying
+      PAPERPILOT_DEEPSEEK_API_KEY: ${PAPERPILOT_DEEPSEEK_API_KEY:-}
+      PAPERPILOT_DEEPSEEK_BASE_URL: ${PAPERPILOT_DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      PAPERPILOT_DEEPSEEK_MODEL: ${PAPERPILOT_DEEPSEEK_MODEL:-deepseek-v4-pro}
     volumes:
       - uploads:/data/uploads
     ports:

@@ -43,6 +43,46 @@ npm run dev
 
 Open `http://localhost:3000`. Demo mode uses an offline literature fixture and a deterministic evidence report, so no API keys are required.
 
+## DeepSeek synthesis
+
+Live research runs use DeepSeek for evidence-grounded report synthesis. Disable demo mode and
+provide the API key before starting the API. Install the declared API dependencies first:
+
+```powershell
+cd E:\Project\PaperPilot
+uv pip install --python .venv\Scripts\python.exe -e "services/api[dev]"
+```
+
+Start the DeepSeek-enabled API on port `8010` in one PowerShell terminal:
+
+```powershell
+$env:PAPERPILOT_DEMO_MODE = "false"
+$env:PAPERPILOT_LOCAL_AUTH_ENABLED = "true"
+$env:PAPERPILOT_DEEPSEEK_API_KEY = "your-api-key"
+$env:PAPERPILOT_DEEPSEEK_MODEL = "deepseek-v4-pro"
+$env:PYTHONPATH = "services/api/src"
+
+.\.venv\Scripts\python.exe -m uvicorn paperpilot.api.app:app --reload --host 127.0.0.1 --port 8010
+```
+
+Start the web app in another PowerShell terminal and point it to the same API port:
+
+```powershell
+$env:NEXT_PUBLIC_API_URL = "http://localhost:8010"
+npm run dev
+```
+
+Open `http://localhost:3000` and use `http://localhost:8010/docs` for the API documentation. If
+port `3000` is already occupied by an older PaperPilot process, stop that process before restarting
+the web app so the new `NEXT_PUBLIC_API_URL` takes effect.
+
+The defaults are `https://api.deepseek.com` and `deepseek-v4-pro`, with high reasoning effort and
+thinking enabled. Set
+`PAPERPILOT_DEEPSEEK_BASE_URL` to route requests through a compliant enterprise gateway. Confirm
+that the selected service contract prohibits training on and retention of customer data before
+using private research material. PowerShell `$env:` values apply only to the current terminal; do
+not commit a real API key to the repository.
+
 ## Full container stack
 
 ```bash

@@ -89,6 +89,20 @@ def test_health_endpoint_does_not_require_authentication(tmp_path: Path) -> None
         assert response.json() == {"status": "ok", "service": "paperpilot-api"}
 
 
+def test_local_auth_can_be_used_with_live_model_mode(tmp_path: Path) -> None:
+    settings = Settings(
+        database_url=f"sqlite:///{tmp_path / 'paperpilot.db'}",
+        storage_path=tmp_path / "uploads",
+        demo_mode=False,
+        local_auth_enabled=True,
+        deepseek_api_key="secret",
+        task_always_eager=True,
+        auth_secret="test-secret-that-is-long-enough",
+    )
+    with TestClient(create_app(settings)) as client:
+        assert login(client)["Authorization"].startswith("Bearer ")
+
+
 def test_signed_upload_accepts_only_pdf_content(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         headers = login(client)

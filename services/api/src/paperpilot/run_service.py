@@ -16,7 +16,7 @@ from paperpilot.database import Database, EvidenceEntity, RunEntity, UploadEntit
 from paperpilot.domain.models import ResearchBrief, RunStage, RunStatus
 from paperpilot.services.pipeline import ResearchPipeline
 from paperpilot.services.llm_synthesis import LlmReportSynthesizer
-from paperpilot.models.openai_compatible import OpenAICompatibleModel
+from paperpilot.models.deepseek import DeepSeekModel, ModelProviderError
 from paperpilot.parsing.grobid import GrobidPdfParser
 from paperpilot.parsing.pymupdf import PyMuPdfParser
 from paperpilot.storage.factory import create_object_store
@@ -50,8 +50,15 @@ class RunService:
                 events.append({"stage": stage.value, "at": datetime.now(timezone.utc).isoformat()})
                 stage_run.events = events
 
+        async def run_pipeline():
+            try:
+                return await pipeline.run(brief, on_stage=on_stage)
+            finally:
+                if pipeline.synthesizer:
+                    await pipeline.synthesizer.aclose()
+
         try:
-            report = asyncio.run(pipeline.run(brief, on_stage=on_stage))
+            report = asyncio.run(run_pipeline())
             with self.database.session() as session:
                 run = session.get(RunEntity, run_id)
                 if not run:
@@ -71,7 +78,7 @@ class RunService:
                 run = session.get(RunEntity, run_id)
                 if run:
                     run.status = RunStatus.FAILED.value
-                    run.error = str(exc)[:1000]
+                    run.error = self._safe_error(exc)
             raise
 
     def _connectors(self, project_id: str) -> list:
@@ -108,17 +115,17 @@ class RunService:
         return connectors
 
     def _synthesizer(self):
-        if not all(
-            (
-                self.settings.model_base_url,
-                self.settings.model_api_key,
-                self.settings.model_name,
-            )
-        ):
+        if self.settings.demo_mode:
             return None
-        model = OpenAICompatibleModel(
-            base_url=self.settings.model_base_url,
-            api_key=self.settings.model_api_key,
-            model=self.settings.model_name,
+        model = DeepSeekModel(
+            base_url=self.settings.deepseek_base_url,
+            api_key=self.settings.deepseek_api_key or "",
+            model=self.settings.deepseek_model,
         )
         return LlmReportSynthesizer(model)
+
+    @staticmethod
+    def _safe_error(exc: Exception) -> str:
+        if isinstance(exc, ModelProviderError):
+            return str(exc)
+        return "Research run failed"

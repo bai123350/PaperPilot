@@ -2,6 +2,8 @@ from celery import Celery
 
 from paperpilot.config import Settings
 from paperpilot.database import Database
+from paperpilot.domain.models import RunStatus
+from paperpilot.models.deepseek import ModelProviderError, TransientModelProviderError
 from paperpilot.run_service import RunService
 from paperpilot.storage.factory import create_object_store
 
@@ -17,12 +19,28 @@ celery_app.conf.update(
 )
 
 
+def should_retry_model_error(exc: Exception) -> bool:
+    return isinstance(exc, TransientModelProviderError)
+
+
 @celery_app.task(name="paperpilot.execute_research_run", bind=True, max_retries=3)
 def execute_research_run(self, run_id: str) -> None:
     try:
         RunService(Database(settings.database_url), settings).execute(run_id)
-    except Exception as exc:
+    except ModelProviderError as exc:
+        if not should_retry_model_error(exc):
+            raise
+        if self.request.retries >= self.max_retries:
+            raise
+        with Database(settings.database_url).session() as session:
+            from paperpilot.database import RunEntity
+
+            run = session.get(RunEntity, run_id)
+            if run:
+                run.status = RunStatus.RETRYING.value
         raise self.retry(exc=exc, countdown=min(60, 2 ** self.request.retries)) from exc
+    except Exception:
+        raise
 
 
 @celery_app.task(name="paperpilot.purge_expired_uploads")

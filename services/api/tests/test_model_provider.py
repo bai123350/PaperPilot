@@ -1,33 +1,138 @@
+import json
+
 import httpx
 import pytest
+from openai import AsyncOpenAI
+from pydantic import ValidationError
 
+from paperpilot.config import Settings
 from paperpilot.domain.models import EvidenceRecord, Paper, ResearchBrief
-from paperpilot.models.openai_compatible import OpenAICompatibleModel
+from paperpilot.models.deepseek import (
+    DeepSeekModel,
+    ModelProviderError,
+    ModelResponseError,
+    TransientModelProviderError,
+)
 from paperpilot.services.llm_synthesis import LlmReportSynthesizer
 
 
-async def test_openai_compatible_model_parses_fenced_json() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        payload = __import__("json").loads(request.content)
-        assert payload["model"] == "qwen-research"
-        assert payload["response_format"] == {"type": "json_object"}
-        return httpx.Response(
-            200,
-            json={"choices": [{"message": {"content": "```json\n{\"summary\": \"Grounded\"}\n```"}}]},
-        )
-
-    model = OpenAICompatibleModel(
-        base_url="https://model.example/v1",
+def deepseek_model(handler, base_url: str = "https://api.deepseek.com") -> DeepSeekModel:
+    sdk_client = AsyncOpenAI(
         api_key="secret",
-        model="qwen-research",
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        base_url=base_url,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    return DeepSeekModel(
+        api_key="secret",
+        base_url=base_url,
+        client=sdk_client,
     )
 
-    assert await model.complete_json("system", {"evidence": []}) == {"summary": "Grounded"}
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"summary": "Grounded"}',
+        '```json\n{"summary": "Grounded"}\n```',
+    ],
+)
+async def test_deepseek_model_sends_expected_request_and_parses_json(content: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://gateway.example/v1/chat/completions"
+        assert request.headers["Authorization"] == "Bearer secret"
+        payload = json.loads(request.content)
+        assert payload["model"] == "deepseek-v4-pro"
+        assert payload["temperature"] == 0.1
+        assert payload["stream"] is False
+        assert payload["reasoning_effort"] == "high"
+        assert payload["thinking"] == {"type": "enabled"}
+        assert payload["response_format"] == {"type": "json_object"}
+        assert "中文证据" in payload["messages"][1]["content"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    model = deepseek_model(handler, "https://gateway.example/v1/")
+
+    assert await model.complete_json("Return JSON", {"evidence": ["中文证据"]}) == {
+        "summary": "Grounded"
+    }
+
+
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        (httpx.Response(200, json={}), "invalid response envelope"),
+        (
+            httpx.Response(200, json={"choices": [{"message": {"content": "not-json"}}]}),
+            "invalid JSON",
+        ),
+        (
+            httpx.Response(200, json={"choices": [{"message": {"content": "[]"}}]}),
+            "JSON object",
+        ),
+    ],
+)
+async def test_deepseek_model_rejects_invalid_responses(
+    response: httpx.Response, message: str
+) -> None:
+    model = deepseek_model(lambda _: response)
+
+    with pytest.raises(ModelResponseError, match=message):
+        await model.complete_json("Return JSON", {})
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 503])
+async def test_deepseek_model_marks_retryable_http_errors(status_code: int) -> None:
+    model = deepseek_model(lambda _: httpx.Response(status_code, text="private provider response"))
+
+    with pytest.raises(TransientModelProviderError, match="temporarily unavailable") as caught:
+        await model.complete_json("Return JSON", {})
+
+    assert "private provider response" not in str(caught.value)
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403])
+async def test_deepseek_model_marks_permanent_http_errors(status_code: int) -> None:
+    model = deepseek_model(lambda _: httpx.Response(status_code, text="private provider response"))
+
+    with pytest.raises(ModelProviderError, match=f"HTTP {status_code}") as caught:
+        await model.complete_json("Return JSON", {})
+
+    assert not isinstance(caught.value, TransientModelProviderError)
+    assert "private provider response" not in str(caught.value)
+
+
+def test_deepseek_configuration_defaults_and_custom_gateway() -> None:
+    settings = Settings(demo_mode=False, deepseek_api_key="secret")
+    custom = Settings(
+        demo_mode=False,
+        deepseek_api_key="secret",
+        deepseek_base_url="https://gateway.example/v1",
+    )
+
+    assert settings.deepseek_base_url == "https://api.deepseek.com"
+    assert settings.deepseek_model == "deepseek-v4-pro"
+    assert custom.deepseek_base_url == "https://gateway.example/v1"
+
+
+def test_live_mode_requires_deepseek_key_but_demo_mode_does_not() -> None:
+    assert Settings(demo_mode=True, deepseek_api_key=None).deepseek_api_key is None
+    with pytest.raises(ValidationError, match="PAPERPILOT_DEEPSEEK_API_KEY"):
+        Settings(demo_mode=False, deepseek_api_key=None)
 
 
 class InvalidEvidenceModel:
     async def complete_json(self, system_prompt: str, payload: dict) -> dict:
+        evidence_id = payload["evidence"][0]["id"]
+        recommendation = {
+            "title": "External validation",
+            "rationale": "The evidence requires independent external validation.",
+            "hypothesis": "The observed association persists in another cohort.",
+            "minimal_validation": "Evaluate the locked analysis in an independent cohort.",
+            "resources": ["Independent cohort"],
+            "risks": ["Selection bias"],
+            "stop_condition": "Stop when discrimination is below 0.65.",
+            "evidence_ids": [evidence_id],
+        }
         return {
             "summary": "A sufficiently detailed evidence-grounded summary.",
             "themes": ["Validation"],
@@ -36,13 +141,12 @@ class InvalidEvidenceModel:
             ],
             "controversies": [],
             "gaps": ["External validation is limited."],
-            "recommendations": [],
+            "recommendations": [recommendation, recommendation, recommendation],
         }
 
 
-async def test_synthesizer_rejects_model_citations_outside_the_evidence_set() -> None:
-    synthesizer = LlmReportSynthesizer(InvalidEvidenceModel())
-    evidence = EvidenceRecord(
+def evidence_fixture() -> EvidenceRecord:
+    return EvidenceRecord(
         id="allowed",
         paper_id="paper-1",
         excerpt="An external cohort confirmed the direction of the observed association.",
@@ -51,7 +155,105 @@ async def test_synthesizer_rejects_model_citations_outside_the_evidence_set() ->
         confidence=0.8,
     )
 
-    with pytest.raises(ValueError, match="unknown evidence"):
+
+async def test_synthesizer_rejects_model_citations_outside_the_evidence_set() -> None:
+    evidence = evidence_fixture()
+    synthesizer = LlmReportSynthesizer(InvalidEvidenceModel())
+
+    with pytest.raises(ModelResponseError, match="outside the current research run"):
+        await synthesizer.synthesize(
+            ResearchBrief(question="What evidence supports external biomarker validation?"),
+            [Paper(id="paper-1", title="External validation", abstract=evidence.excerpt, source="test")],
+            [evidence],
+        )
+
+
+class InvalidPayloadModel:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    async def complete_json(self, system_prompt: str, payload: dict) -> dict:
+        return self.payload
+
+
+class CorrectingPayloadModel:
+    def __init__(self, evidence_id: str) -> None:
+        self.evidence_id = evidence_id
+        self.calls: list[tuple[str, dict]] = []
+
+    async def complete_json(self, system_prompt: str, payload: dict) -> dict:
+        self.calls.append((system_prompt, payload))
+        if len(self.calls) == 1:
+            return {"summary": "too short"}
+        recommendation = {
+            "title": "Independent external validation",
+            "rationale": "The current evidence base requires independent external validation.",
+            "hypothesis": "The reported association persists in an independent cohort.",
+            "minimal_validation": "Evaluate the locked analysis in an independent prospective cohort.",
+            "resources": ["Independent cohort"],
+            "risks": ["Selection bias"],
+            "stop_condition": "Stop when discrimination is below 0.65.",
+            "evidence_ids": [self.evidence_id],
+        }
+        return {
+            "summary": "A corrected and sufficiently detailed evidence-grounded synthesis.",
+            "themes": ["External validation"],
+            "claims": [
+                {
+                    "statement": "The evidence supports further independent validation.",
+                    "evidence_ids": [self.evidence_id],
+                }
+            ],
+            "controversies": ["Validation methods differ between studies."],
+            "gaps": ["Independent prospective validation remains limited."],
+            "recommendations": [recommendation, recommendation, recommendation],
+        }
+
+
+async def test_synthesizer_corrects_one_invalid_structured_response() -> None:
+    evidence = evidence_fixture()
+    model = CorrectingPayloadModel(evidence.id)
+    synthesizer = LlmReportSynthesizer(model)
+
+    result = await synthesizer.synthesize(
+        ResearchBrief(question="What evidence supports external biomarker validation?"),
+        [Paper(id="paper-1", title="External validation", abstract=evidence.excerpt, source="test")],
+        [evidence],
+    )
+
+    assert len(result["recommendations"]) == 3
+    assert len(model.calls) == 2
+    assert "output_schema" in model.calls[0][1]
+    assert model.calls[1][1]["validation_errors"]
+    assert "too short" not in json.dumps(model.calls[1][1])
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "summary": "A sufficiently detailed evidence-grounded summary.",
+            "themes": [],
+            "claims": [],
+            "controversies": [],
+            "gaps": ["Validation is missing."],
+            "recommendations": [],
+        },
+        {
+            "summary": "A sufficiently detailed evidence-grounded summary.",
+            "themes": [],
+            "claims": [{"statement": "A supported finding has been reported.", "evidence_ids": []}],
+            "controversies": [],
+            "gaps": ["Validation is missing."],
+            "recommendations": [],
+        },
+    ],
+)
+async def test_synthesizer_rejects_invalid_claims_and_recommendation_count(payload: dict) -> None:
+    evidence = evidence_fixture()
+    synthesizer = LlmReportSynthesizer(InvalidPayloadModel(payload))
+
+    with pytest.raises(ModelResponseError, match="invalid synthesis payload"):
         await synthesizer.synthesize(
             ResearchBrief(question="What evidence supports external biomarker validation?"),
             [Paper(id="paper-1", title="External validation", abstract=evidence.excerpt, source="test")],

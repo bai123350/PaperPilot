@@ -30,8 +30,8 @@ def demo_login(
     request: Request,
     session: Annotated[Session, Depends(get_session)],
 ) -> dict[str, str]:
-    if not request.app.state.settings.demo_mode:
-        raise HTTPException(status_code=404, detail="Demo authentication is disabled")
+    if not request.app.state.settings.local_auth_enabled:
+        raise HTTPException(status_code=404, detail="Local authentication is disabled")
     user = session.scalar(select(UserEntity).where(UserEntity.email == str(payload.email)))
     if not user:
         user = UserEntity(email=str(payload.email), name=payload.name)

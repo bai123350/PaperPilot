@@ -15,6 +15,7 @@ from paperpilot.api.routes.projects import owned_project
 from paperpilot.database import EvidenceEntity, ProjectEntity, RunEntity, UserEntity
 from paperpilot.domain.models import ResearchBrief, RunStatus
 from paperpilot.domain.models import Report
+from paperpilot.models.deepseek import ModelProviderError
 from paperpilot.services.markdown_export import render_markdown
 
 
@@ -64,7 +65,10 @@ def create_run(
     session.commit()
     session.refresh(run)
     if request.app.state.settings.task_always_eager:
-        request.app.state.run_service.execute(run.id)
+        try:
+            request.app.state.run_service.execute(run.id)
+        except ModelProviderError:
+            pass
         session.expire_all()
         run = owned_run(session, user.id, run.id)
     else:
@@ -108,7 +112,10 @@ def retry_run(
     run.error = None
     session.commit()
     if request.app.state.settings.task_always_eager:
-        request.app.state.run_service.execute(run.id)
+        try:
+            request.app.state.run_service.execute(run.id)
+        except ModelProviderError:
+            pass
         session.expire_all()
         run = owned_run(session, user.id, run.id)
     else:

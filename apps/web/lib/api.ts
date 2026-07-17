@@ -119,13 +119,20 @@ export class PaperPilotApi {
   }
 
   private async authenticated<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const token = await this.ensureSession();
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${token}`,
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-      ...(init.headers as Record<string, string> | undefined),
+    const requestWithToken = async (token: string) => {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(init.headers as Record<string, string> | undefined),
+      };
+      return fetch(`${this.baseUrl}${path}`, { ...init, headers });
     };
-    const response = await fetch(`${this.baseUrl}${path}`, { ...init, headers });
+
+    let response = await requestWithToken(await this.ensureSession());
+    if (response.status === 401) {
+      localStorage.removeItem(tokenKey);
+      response = await requestWithToken(await this.ensureSession());
+    }
     return this.read<T>(response);
   }
 

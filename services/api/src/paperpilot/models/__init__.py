@@ -1,3 +1,13 @@
-from paperpilot.models.openai_compatible import OpenAICompatibleModel
+from paperpilot.models.deepseek import (
+    DeepSeekModel,
+    ModelProviderError,
+    ModelResponseError,
+    TransientModelProviderError,
+)
 
-__all__ = ["OpenAICompatibleModel"]
+__all__ = [
+    "DeepSeekModel",
+    "ModelProviderError",
+    "ModelResponseError",
+    "TransientModelProviderError",
+]
