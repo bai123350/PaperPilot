@@ -12,7 +12,11 @@ import { NewResearchForm } from "./new-research-form";
 export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
   const router = useRouter();
 
-  async function start(brief: ResearchBriefInput, files: File[]) {
+  async function start(
+    brief: ResearchBriefInput,
+    files: File[],
+    messages: ResearchAssistantMessage[],
+  ) {
     const project = projectId
       ? await api.getProject(projectId)
       : await api.createProject(
@@ -21,6 +25,7 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
         );
     await Promise.all(files.map((file) => api.uploadPdf(project.id, file)));
     const run = await api.createRun(project.id, brief);
+    await api.bootstrapRunConversation(run.id, messages);
     router.push(`/runs/${run.id}`);
   }
 

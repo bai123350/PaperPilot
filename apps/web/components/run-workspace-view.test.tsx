@@ -16,6 +16,7 @@ describe("RunWorkspaceView", () => {
           created_at: "2026-07-17T10:00:00Z",
           updated_at: "2026-07-17T10:10:00Z",
           completed_at: "2026-07-17T10:10:00Z",
+          report_version: 1,
         }}
         report={{
           schemaVersion: "1.0",

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Protocol
+
+import httpx
 
 from paperpilot.domain.models import (
     Claim,
@@ -14,6 +17,9 @@ from paperpilot.domain.models import (
     TimelineItem,
 )
 from paperpilot.services.deduplication import deduplicate_papers
+
+
+logger = logging.getLogger(__name__)
 
 
 class LiteratureConnector(Protocol):
@@ -50,7 +56,16 @@ class ResearchPipeline:
         on_stage(RunStage.PLANNING)
         on_stage(RunStage.SEARCHING)
         for connector in self.connectors:
-            papers.extend(await connector.search(brief))
+            try:
+                papers.extend(await connector.search(brief))
+            except httpx.HTTPError as exc:
+                logger.warning(
+                    "Literature connector unavailable",
+                    extra={
+                        "connector": connector.name,
+                        "error_type": type(exc).__name__,
+                    },
+                )
 
         on_stage(RunStage.DEDUPLICATING)
         papers = deduplicate_papers(papers)

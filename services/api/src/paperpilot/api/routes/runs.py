@@ -43,6 +43,7 @@ def run_payload(run: RunEntity) -> dict:
         "created_at": run.created_at,
         "updated_at": run.updated_at,
         "completed_at": run.completed_at,
+        "report_version": run.report_version,
     }
 
 
@@ -50,7 +51,6 @@ def run_payload(run: RunEntity) -> dict:
 def create_run(
     project_id: str,
     brief: ResearchBrief,
-    request: Request,
     user: Annotated[UserEntity, Depends(current_user)],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict:
@@ -64,10 +64,24 @@ def create_run(
     session.add(run)
     session.commit()
     session.refresh(run)
+    return run_payload(run)
+
+
+@router.post("/runs/{run_id}/start", status_code=status.HTTP_202_ACCEPTED)
+def start_run(
+    run_id: str,
+    request: Request,
+    user: Annotated[UserEntity, Depends(current_user)],
+    session: Annotated[Session, Depends(get_session)],
+) -> dict:
+    run = owned_run(session, user.id, run_id)
+    if run.status != RunStatus.QUEUED.value:
+        return run_payload(run)
     if request.app.state.settings.task_always_eager:
         try:
             request.app.state.run_service.execute(run.id)
-        except ModelProviderError:
+        except Exception:
+            # RunService persists a safe failed state before propagating the cause.
             pass
         session.expire_all()
         run = owned_run(session, user.id, run.id)

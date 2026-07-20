@@ -31,21 +31,24 @@ class LlmReportSynthesizer:
         papers: list[Paper],
         evidence: list[EvidenceRecord],
     ) -> dict:
+        selected_evidence = evidence[:60]
+        selected_paper_ids = {item.paper_id for item in selected_evidence}
         request_payload = {
             "research_brief": brief.model_dump(mode="json", exclude_none=True),
             "papers": [
                 {"id": paper.id, "title": paper.title, "year": paper.year}
                 for paper in papers
+                if paper.id in selected_paper_ids
             ],
             "evidence": [
                 {
                     "id": item.id,
                     "paper_id": item.paper_id,
-                    "excerpt": item.excerpt,
+                    "excerpt": item.excerpt[:1200],
                     "locator": item.locator,
                     "evidence_type": item.evidence_type,
                 }
-                for item in evidence
+                for item in selected_evidence
             ],
             "output_schema": SynthesisPayload.model_json_schema(),
         }
