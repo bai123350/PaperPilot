@@ -154,13 +154,13 @@ a { color: inherit; text-decoration: none; }
 .assistant-messages { max-height: 340px; min-height: 150px; overflow-y: auto; padding: 20px 26px; }
 .assistant-message { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 9px; max-width: 82%; margin-bottom: 17px; }
 .assistant-message:last-child { margin-bottom: 0; }
-.message-user { margin-left: auto; }
+.assistant-message.message-user { margin-left: auto; }
 .message-avatar { width: 28px; height: 28px; display: grid; place-items: center; color: var(--green); background: var(--green-soft); border-radius: 50%; }
-.message-user .message-avatar { grid-column: 2; color: var(--blue); background: #e4ecf5; }
-.message-user > div { grid-column: 1; grid-row: 1; text-align: right; }
+.assistant-message.message-user .message-avatar { grid-column: 2; color: var(--blue); background: #e4ecf5; }
+.assistant-message.message-user > div { grid-column: 1; grid-row: 1; text-align: right; }
 .assistant-message strong { display: block; margin-bottom: 4px; color: #4b5851; font-size: 11px; }
 .assistant-message p { margin: 0; padding: 10px 12px; color: #35413b; background: white; border: 1px solid var(--line); border-radius: 6px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-.message-user p { color: white; background: var(--blue); border-color: var(--blue); text-align: left; }
+.assistant-message.message-user p { color: white; background: var(--blue); border-color: var(--blue); text-align: left; }
 .assistant-thinking p { color: var(--muted); }
 .assistant-thinking p span { animation: pulse 1.2s ease-in-out infinite; }
 .assistant-error { margin: 0; padding: 0 26px 12px; color: var(--red); font-size: 12px; }
@@ -180,6 +180,34 @@ a { color: inherit; text-decoration: none; }
 .progress-track { height: 5px; margin: 24px 0 34px; overflow: hidden; background: #dce2de; }
 .progress-track span { display: block; height: 100%; background: var(--green); transition: width .3s ease; }
 .run-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 32px; align-items: start; }
+.run-dialog-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 28px; align-items: start; }
+.run-dialog-layout > .run-workspace { min-width: 0; }
+.run-conversation {
+  position: sticky; top: 22px; min-width: 0; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 7px;
+}
+.conversation-header { display: flex; align-items: center; gap: 9px; min-height: 62px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+.conversation-header > svg { color: var(--green); }
+.conversation-header h2 { margin: 0 0 3px; font-size: 14px; }
+.conversation-header p { margin: 0; color: var(--muted); font-size: 11px; }
+.conversation-messages { height: min(48vh, 480px); min-height: 260px; overflow-y: auto; padding: 16px; background: #f8faf8; }
+.conversation-message { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; margin-bottom: 15px; }
+.conversation-message.message-user { margin-left: 28px; }
+.conversation-message strong { display: block; margin-bottom: 4px; color: #4b5851; font-size: 10px; }
+.conversation-message p { margin: 0; padding: 9px 10px; background: white; border: 1px solid var(--line); border-radius: 6px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.conversation-message.message-user p { background: #eaf0f6; border-color: #d3dee9; }
+.conversation-message small { display: block; margin-top: 5px; color: var(--green); font-size: 10px; }
+.conversation-empty { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 8px; color: var(--muted); text-align: center; }
+.conversation-empty p { max-width: 240px; margin: 0; line-height: 1.55; }
+.conversation-thinking { margin: 0; color: var(--muted); font-size: 11px; }
+.conversation-compose { padding: 12px; border-top: 1px solid var(--line); }
+.conversation-mode { display: grid; grid-template-columns: 1fr 1.45fr; margin-bottom: 9px; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.conversation-mode button { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 8px; border: 0; border-right: 1px solid var(--line); color: var(--muted); background: white; cursor: pointer; font-size: 11px; }
+.conversation-mode button:last-child { border-right: 0; }
+.conversation-mode button.active { color: var(--green); background: var(--green-soft); font-weight: 750; }
+.conversation-input-row { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 8px; align-items: end; }
+.conversation-input-row textarea { width: 100%; min-height: 70px; padding: 9px 10px; resize: vertical; color: var(--ink); background: white; border: 1px solid #cbd3ce; border-radius: 5px; outline: 0; line-height: 1.5; }
+.conversation-input-row textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(23,107,82,.1); }
 .run-stage-panel { padding: 26px; background: var(--surface); border: 1px solid var(--line); }
 .section-heading { display: flex; align-items: end; justify-content: space-between; margin-bottom: 20px; }
 .section-heading > div { display: flex; align-items: baseline; gap: 12px; }
@@ -269,6 +297,9 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 1050px) {
   .project-grid, .recommendation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .recommendation-card:last-child { grid-column: span 2; min-height: 390px; }
+  .run-dialog-layout { grid-template-columns: 1fr; }
+  .run-conversation { position: static; grid-row: 1; }
+  .conversation-messages { height: 340px; }
 }
 
 @media (max-width: 760px) {
@@ -305,7 +336,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 @media print {
-  .sidebar, .topbar, .report-toolbar, .run-header, .progress-track { display: none !important; }
+  .sidebar, .topbar, .report-toolbar, .run-header, .progress-track, .run-conversation { display: none !important; }
   .app-shell, .main-frame { display: block; }
   .page-content { width: 100%; max-width: none; padding: 0; }
   .report-content { max-width: none; }

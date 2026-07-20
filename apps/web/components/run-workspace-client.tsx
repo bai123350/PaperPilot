@@ -1,16 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, Printer } from "lucide-react";
 
 import { api, type RunRecord } from "../lib/api";
+import type { RunConversationMessage } from "../lib/api";
 import { mapReport } from "../lib/report-mapper";
 import type { ReportViewModel } from "../lib/types";
 import { RunWorkspaceView } from "./run-workspace-view";
+import { ResearchConversation } from "./research-conversation";
 
 export function RunWorkspaceClient({ runId }: { runId: string }) {
+  const startRequested = useRef(false);
   const [run, setRun] = useState<RunRecord | null>(null);
   const [report, setReport] = useState<ReportViewModel | null>(null);
+  const [messages, setMessages] = useState<RunConversationMessage[]>([]);
+  const [reportVersion, setReportVersion] = useState(1);
+  const [conversationPending, setConversationPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,9 +25,21 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
 
     async function refresh() {
       try {
-        const nextRun = await api.getRun(runId);
+        const [nextRun, conversation] = await Promise.all([
+          api.getRun(runId),
+          api.getRunConversation(runId),
+        ]);
         if (!active) return;
         setRun(nextRun);
+        setMessages(conversation.messages);
+        setReportVersion(conversation.report_version);
+        if (nextRun.status === "queued" && !startRequested.current) {
+          startRequested.current = true;
+          void api.startRun(runId).then(refresh).catch((reason) => {
+            if (active) setError(reason instanceof Error ? reason.message : "研究启动失败");
+          });
+          return;
+        }
         if (nextRun.status === "completed") {
           const rawReport = await api.getReport(runId);
           if (active) setReport(mapReport(rawReport as Parameters<typeof mapReport>[0]));
@@ -52,9 +70,38 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
           <button type="button" onClick={() => downloadMarkdown(run.id)}><Download size={16} />Markdown</button>
         </div>
       ) : null}
-      <RunWorkspaceView run={run} report={report} />
+      <div className="run-dialog-layout">
+        <RunWorkspaceView run={run} report={report} />
+        <ResearchConversation
+          messages={messages}
+          pending={conversationPending}
+          canRevise={run.status === "completed" && Boolean(report)}
+          reportVersion={reportVersion}
+          onSend={sendMessage}
+        />
+      </div>
     </>
   );
+
+  async function sendMessage(content: string, action: "discuss" | "revise_report") {
+    setConversationPending(true);
+    setError(null);
+    try {
+      const response = await api.sendRunMessage(runId, content, action);
+      const conversation = await api.getRunConversation(runId);
+      setMessages(conversation.messages);
+      setReportVersion(response.report_version);
+      if (response.report_updated) {
+        const rawReport = await api.getReport(runId);
+        setReport(mapReport(rawReport as Parameters<typeof mapReport>[0]));
+        setRun((current) => current ? { ...current, report_version: response.report_version } : current);
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "消息发送失败");
+    } finally {
+      setConversationPending(false);
+    }
+  }
 }
 
 async function downloadMarkdown(runId: string) {

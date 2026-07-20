@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from paperpilot.api.routes import auth, projects, research_assistant, runs, uploads
+from paperpilot.api.routes import auth, projects, research_assistant, run_conversation, runs, uploads
 from paperpilot.auth import AuthService
 from paperpilot.config import Settings
 from paperpilot.database import Database
@@ -46,11 +46,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "service": "paperpilot-api"}
+        return {
+            "status": "ok",
+            "service": "paperpilot-api",
+            "mode": "demo" if active_settings.demo_mode else "live",
+        }
 
     app.include_router(auth.router)
     app.include_router(projects.router)
     app.include_router(research_assistant.router)
+    app.include_router(run_conversation.router)
     app.include_router(runs.router)
     app.include_router(uploads.router)
     return app

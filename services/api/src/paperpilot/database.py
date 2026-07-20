@@ -5,7 +5,17 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, create_engine, event
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    event,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -69,8 +79,15 @@ class RunEntity(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    report_version: Mapped[int] = mapped_column(Integer, default=1)
     project: Mapped[ProjectEntity] = relationship(back_populates="runs")
     evidence: Mapped[list[EvidenceEntity]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    conversation_messages: Mapped[list[ConversationMessageEntity]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+    report_revisions: Mapped[list[ReportRevisionEntity]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
 
 
 class EvidenceEntity(Base):
@@ -80,6 +97,32 @@ class EvidenceEntity(Base):
     run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.id", ondelete="CASCADE"), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     run: Mapped[RunEntity] = relationship(back_populates="evidence")
+
+
+class ConversationMessageEntity(Base):
+    __tablename__ = "run_conversation_messages"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid4().hex)
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    evidence_ids: Mapped[list] = mapped_column(JSON, default=list)
+    report_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    run: Mapped[RunEntity] = relationship(back_populates="conversation_messages")
+
+
+class ReportRevisionEntity(Base):
+    __tablename__ = "report_revisions"
+    __table_args__ = (UniqueConstraint("run_id", "version", name="uq_report_revisions_run_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid4().hex)
+    run_id: Mapped[str] = mapped_column(ForeignKey("research_runs.id", ondelete="CASCADE"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    report: Mapped[dict] = mapped_column(JSON)
+    instruction: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    run: Mapped[RunEntity] = relationship(back_populates="report_revisions")
 
 
 class Database:

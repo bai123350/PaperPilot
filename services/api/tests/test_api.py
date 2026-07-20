@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from paperpilot.api.app import create_app
 from paperpilot.config import Settings
+from paperpilot.database import RunEntity
 
 
 def build_client(tmp_path: Path) -> TestClient:
@@ -21,6 +22,12 @@ def login(client: TestClient, email: str = "researcher@example.com") -> dict[str
     response = client.post("/v1/auth/demo", json={"email": email, "name": "Researcher"})
     assert response.status_code == 200
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def start_run(client: TestClient, headers: dict[str, str], run_id: str) -> dict:
+    response = client.post(f"/v1/runs/{run_id}/start", headers=headers)
+    assert response.status_code == 202
+    return response.json()
 
 
 def test_project_run_report_and_evidence_flow(tmp_path: Path) -> None:
@@ -45,6 +52,8 @@ def test_project_run_report_and_evidence_flow(tmp_path: Path) -> None:
         )
         assert run_response.status_code == 202
         run = run_response.json()
+        assert run["status"] == "queued"
+        run = start_run(client, headers, run["id"])
         assert run["status"] == "completed"
         assert run["stage"] == "auditing"
 
@@ -57,6 +66,99 @@ def test_project_run_report_and_evidence_flow(tmp_path: Path) -> None:
         evidence_response = client.get(f"/v1/runs/{run['id']}/evidence", headers=headers)
         assert evidence_response.status_code == 200
         assert evidence_response.json()[0]["excerpt"]
+
+
+def test_start_run_returns_the_persisted_failed_state(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        headers = login(client)
+        project = client.post(
+            "/v1/projects", headers=headers, json={"name": "Failure handling"}
+        ).json()
+        run = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=headers,
+            json={"question": "What evidence supports robust external biomarker validation?"},
+        ).json()
+
+        def fail_after_persisting(run_id: str) -> None:
+            with client.app.state.database.session() as session:
+                stored = session.get(RunEntity, run_id)
+                stored.status = "failed"
+                stored.error = "Research run failed"
+            raise RuntimeError("connector unavailable")
+
+        client.app.state.run_service.execute = fail_after_persisting
+        response = client.post(f"/v1/runs/{run['id']}/start", headers=headers)
+
+        assert response.status_code == 202
+        assert response.json()["status"] == "failed"
+        assert response.json()["error"] == "Research run failed"
+
+
+def test_run_conversation_persists_and_revises_report_with_current_evidence(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        headers = login(client)
+        project = client.post(
+            "/v1/projects", headers=headers, json={"name": "Conversation project"}
+        ).json()
+        run = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=headers,
+            json={"question": "What evidence supports external validation of response biomarkers?"},
+        ).json()
+        run = start_run(client, headers, run["id"])
+
+        bootstrap = client.post(
+            f"/v1/runs/{run['id']}/conversation/bootstrap",
+            headers=headers,
+            json={
+                "messages": [
+                    {"role": "assistant", "content": "我们先明确研究边界。"},
+                    {"role": "user", "content": "重点关注外部验证。"},
+                ]
+            },
+        )
+        assert bootstrap.status_code == 200
+        assert len(bootstrap.json()["messages"]) == 2
+
+        revision = client.post(
+            f"/v1/runs/{run['id']}/conversation/messages",
+            headers=headers,
+            json={"content": "请补充局限性并完善报告。", "action": "revise_report"},
+        )
+        assert revision.status_code == 200
+        assert revision.json()["report_updated"] is True
+        assert revision.json()["report_version"] == 2
+        assert revision.json()["message"]["evidence_ids"]
+
+        conversation = client.get(
+            f"/v1/runs/{run['id']}/conversation", headers=headers
+        ).json()
+        assert [item["role"] for item in conversation["messages"]][-2:] == [
+            "user",
+            "assistant",
+        ]
+        assert conversation["report_version"] == 2
+        revised_report = client.get(f"/v1/runs/{run['id']}/report", headers=headers).json()
+        assert "外部验证" in revised_report["gaps"][-1]
+
+
+def test_run_conversation_is_isolated_by_authenticated_user(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        owner = login(client, "conversation-owner@example.com")
+        stranger = login(client, "conversation-stranger@example.com")
+        project = client.post(
+            "/v1/projects", headers=owner, json={"name": "Private conversation"}
+        ).json()
+        run = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=owner,
+            json={"question": "What evidence supports response biomarker validation studies?"},
+        ).json()
+
+        assert client.get(
+            f"/v1/runs/{run['id']}/conversation", headers=stranger
+        ).status_code == 404
 
 
 def test_projects_are_isolated_by_authenticated_user(tmp_path: Path) -> None:
@@ -86,7 +188,11 @@ def test_health_endpoint_does_not_require_authentication(tmp_path: Path) -> None
     with build_client(tmp_path) as client:
         response = client.get("/health")
         assert response.status_code == 200
-        assert response.json() == {"status": "ok", "service": "paperpilot-api"}
+        assert response.json() == {
+            "status": "ok",
+            "service": "paperpilot-api",
+            "mode": "demo",
+        }
 
 
 def test_research_assistant_uses_current_brief_and_requires_authentication(tmp_path: Path) -> None:
@@ -178,6 +284,7 @@ def test_report_can_be_exported_as_evidence_linked_markdown(tmp_path: Path) -> N
             headers=headers,
             json={"question": "What evidence supports external validation of response biomarkers?"},
         ).json()
+        run = start_run(client, headers, run["id"])
 
         response = client.get(f"/v1/runs/{run['id']}/report.md", headers=headers)
 

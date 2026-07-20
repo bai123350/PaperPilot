@@ -15,6 +15,7 @@ export interface RunRecord {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  report_version: number;
 }
 
 export interface ResearchBriefInput {
@@ -32,6 +33,19 @@ export interface ResearchBriefInput {
 export interface ResearchAssistantMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+export interface RunConversationMessage extends ResearchAssistantMessage {
+  id: string;
+  evidence_ids: string[];
+  report_version: number | null;
+  created_at: string;
+}
+
+export interface RunConversation {
+  contract_version: "1.0";
+  report_version: number;
+  messages: RunConversationMessage[];
 }
 
 const tokenKey = "paperpilot_access_token";
@@ -116,8 +130,37 @@ export class PaperPilotApi {
     return this.authenticated<RunRecord>(`/v1/runs/${id}`);
   }
 
+  async startRun(id: string): Promise<RunRecord> {
+    return this.authenticated<RunRecord>(`/v1/runs/${id}/start`, { method: "POST" });
+  }
+
   async getReport(id: string): Promise<unknown> {
     return this.authenticated<unknown>(`/v1/runs/${id}/report`);
+  }
+
+  async getRunConversation(id: string): Promise<RunConversation> {
+    return this.authenticated<RunConversation>(`/v1/runs/${id}/conversation`);
+  }
+
+  async bootstrapRunConversation(
+    id: string,
+    messages: ResearchAssistantMessage[],
+  ): Promise<RunConversation> {
+    return this.authenticated<RunConversation>(`/v1/runs/${id}/conversation/bootstrap`, {
+      method: "POST",
+      body: JSON.stringify({ messages }),
+    });
+  }
+
+  async sendRunMessage(
+    id: string,
+    content: string,
+    action: "discuss" | "revise_report" = "discuss",
+  ): Promise<{ message: RunConversationMessage; report_updated: boolean; report_version: number }> {
+    return this.authenticated(`/v1/runs/${id}/conversation/messages`, {
+      method: "POST",
+      body: JSON.stringify({ contract_version: "1.0", content, action }),
+    });
   }
 
   async downloadMarkdown(id: string): Promise<Blob> {

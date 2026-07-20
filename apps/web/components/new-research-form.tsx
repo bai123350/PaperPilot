@@ -14,7 +14,11 @@ export function NewResearchForm({
   onSubmit,
   onAssist,
 }: {
-  onSubmit: (brief: ResearchBriefInput, files: File[]) => Promise<void>;
+  onSubmit: (
+    brief: ResearchBriefInput,
+    files: File[],
+    messages: ResearchAssistantMessage[],
+  ) => Promise<void>;
   onAssist: (
     brief: ResearchBriefInput,
     messages: ResearchAssistantMessage[],
@@ -43,7 +47,7 @@ export function NewResearchForm({
       const files = data
         .getAll("files")
         .filter((item): item is File => item instanceof File && item.size > 0);
-      await onSubmit(toBrief(data), files);
+      await onSubmit(toBrief(data), files, messages);
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "提交失败");
       setPending(false);

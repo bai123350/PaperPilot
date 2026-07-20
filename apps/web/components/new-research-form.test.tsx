@@ -24,6 +24,7 @@ describe("NewResearchForm", () => {
         population: "Adults receiving systemic therapy",
       }),
       [],
+      expect.any(Array),
     ));
   });
 

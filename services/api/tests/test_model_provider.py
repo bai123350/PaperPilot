@@ -34,6 +34,7 @@ def deepseek_model(handler, base_url: str = "https://api.deepseek.com") -> DeepS
     [
         '{"summary": "Grounded"}',
         '```json\n{"summary": "Grounded"}\n```',
+        'Result:\n```json\n{"summary": "Grounded"}\n```\nDone.',
     ],
 )
 async def test_deepseek_model_sends_expected_request_and_parses_json(content: str) -> None:
@@ -43,6 +44,7 @@ async def test_deepseek_model_sends_expected_request_and_parses_json(content: st
         payload = json.loads(request.content)
         assert payload["model"] == "deepseek-v4-pro"
         assert payload["temperature"] == 0.1
+        assert payload["max_tokens"] == 8192
         assert payload["stream"] is False
         assert payload["reasoning_effort"] == "high"
         assert payload["thinking"] == {"type": "enabled"}
@@ -55,6 +57,21 @@ async def test_deepseek_model_sends_expected_request_and_parses_json(content: st
     assert await model.complete_json("Return JSON", {"evidence": ["中文证据"]}) == {
         "summary": "Grounded"
     }
+
+
+async def test_deepseek_model_retries_one_truncated_json_response() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        content = '{"summary":' if calls == 1 else '{"summary": "Recovered"}'
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    model = deepseek_model(handler)
+
+    assert await model.complete_json("Return JSON", {}) == {"summary": "Recovered"}
+    assert calls == 2
 
 
 async def test_deepseek_model_sends_conversation_and_returns_text() -> None:

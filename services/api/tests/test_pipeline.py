@@ -1,3 +1,5 @@
+import httpx
+
 from paperpilot.domain.models import Paper, ResearchBrief, RunStage
 from paperpilot.services.pipeline import ResearchPipeline
 
@@ -19,6 +21,13 @@ class StubConnector:
                 source=self.name,
             )
         ]
+
+
+class UnavailableConnector:
+    name = "unavailable"
+
+    async def search(self, brief: ResearchBrief) -> list[Paper]:
+        raise httpx.ConnectError("source unavailable")
 
 
 class StubSynthesizer:
@@ -80,3 +89,15 @@ async def test_pipeline_uses_the_configured_evidence_synthesizer() -> None:
 
     assert report.summary.startswith("Model-generated")
     assert report.themes == ["External validation"]
+
+
+async def test_pipeline_continues_when_one_literature_source_is_unavailable() -> None:
+    pipeline = ResearchPipeline(connectors=[UnavailableConnector(), StubConnector()])
+
+    report = await pipeline.run(
+        ResearchBrief(question="What evidence supports robust external biomarker validation?"),
+        on_stage=lambda _: None,
+    )
+
+    assert report.papers[0].source == "stub"
+    assert report.evidence
