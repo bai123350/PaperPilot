@@ -57,6 +57,31 @@ async def test_deepseek_model_sends_expected_request_and_parses_json(content: st
     }
 
 
+async def test_deepseek_model_sends_conversation_and_returns_text() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["temperature"] == 0.2
+        assert payload["stream"] is False
+        assert payload["messages"] == [
+            {"role": "system", "content": "Refine the question"},
+            {"role": "user", "content": "范围是否太宽？"},
+        ]
+        assert "response_format" not in payload
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "  建议明确主要结局。  "}}]},
+        )
+
+    model = deepseek_model(handler)
+
+    reply = await model.complete_text(
+        "Refine the question",
+        [{"role": "user", "content": "范围是否太宽？"}],
+    )
+
+    assert reply == "建议明确主要结局。"
+
+
 @pytest.mark.parametrize(
     ("response", "message"),
     [

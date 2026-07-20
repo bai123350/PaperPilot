@@ -29,6 +29,11 @@ export interface ResearchBriefInput {
   study_types?: string[];
 }
 
+export interface ResearchAssistantMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 const tokenKey = "paperpilot_access_token";
 
 export class PaperPilotApi {
@@ -71,6 +76,20 @@ export class PaperPilotApi {
       method: "POST",
       body: JSON.stringify(brief),
     });
+  }
+
+  async askResearchAssistant(
+    brief: ResearchBriefInput,
+    messages: ResearchAssistantMessage[],
+  ): Promise<ResearchAssistantMessage> {
+    const response = await this.authenticated<{
+      contract_version: "1.0";
+      message: ResearchAssistantMessage;
+    }>("/v1/research-assistant/messages", {
+      method: "POST",
+      body: JSON.stringify({ contract_version: "1.0", brief, messages: messages.slice(-12) }),
+    });
+    return response.message;
   }
 
   async uploadPdf(projectId: string, file: File): Promise<{ object_key: string }> {
