@@ -89,6 +89,29 @@ def test_health_endpoint_does_not_require_authentication(tmp_path: Path) -> None
         assert response.json() == {"status": "ok", "service": "paperpilot-api"}
 
 
+def test_research_assistant_uses_current_brief_and_requires_authentication(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        payload = {
+            "contract_version": "1.0",
+            "brief": {
+                "question": "循环肿瘤 DNA 能否预测晚期结直肠癌的治疗响应？",
+            },
+            "messages": [{"role": "user", "content": "这个研究问题还缺什么？"}],
+        }
+        assert client.post("/v1/research-assistant/messages", json=payload).status_code == 401
+
+        response = client.post(
+            "/v1/research-assistant/messages",
+            headers=login(client),
+            json=payload,
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["contract_version"] == "1.0"
+        assert body["message"]["role"] == "assistant"
+        assert "研究人群" in body["message"]["content"]
+
+
 def test_local_auth_can_be_used_with_live_model_mode(tmp_path: Path) -> None:
     settings = Settings(
         database_url=f"sqlite:///{tmp_path / 'paperpilot.db'}",

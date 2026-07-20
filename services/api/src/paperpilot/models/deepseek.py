@@ -75,6 +75,35 @@ class DeepSeekModel:
             raise ModelResponseError("DeepSeek response must be a JSON object")
         return parsed
 
+    async def complete_text(self, system_prompt: str, messages: list[dict[str, str]]) -> str:
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "system", "content": system_prompt}, *messages],
+                stream=False,
+                temperature=0.2,
+                reasoning_effort="high",
+                extra_body={"thinking": {"type": "enabled"}},
+            )
+        except (openai.APITimeoutError, openai.APIConnectionError):
+            raise TransientModelProviderError("DeepSeek is temporarily unavailable") from None
+        except openai.APIStatusError as exc:
+            if exc.status_code == 429 or exc.status_code >= 500:
+                raise TransientModelProviderError("DeepSeek is temporarily unavailable") from None
+            raise ModelProviderError(
+                f"DeepSeek request rejected with HTTP {exc.status_code}"
+            ) from None
+        except openai.APIError:
+            raise ModelProviderError("DeepSeek request failed") from None
+
+        try:
+            content = response.choices[0].message.content
+        except (AttributeError, IndexError, TypeError):
+            raise ModelResponseError("DeepSeek returned an invalid response envelope") from None
+        if not isinstance(content, str) or not content.strip():
+            raise ModelResponseError("DeepSeek returned invalid message content")
+        return content.strip()
+
     async def aclose(self) -> None:
         if self._owns_client:
             await self.client.close()

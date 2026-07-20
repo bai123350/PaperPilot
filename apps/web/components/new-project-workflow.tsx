@@ -2,7 +2,11 @@
 
 import { useRouter } from "next/navigation";
 
-import { api, type ResearchBriefInput } from "../lib/api";
+import {
+  api,
+  type ResearchAssistantMessage,
+  type ResearchBriefInput,
+} from "../lib/api";
 import { NewResearchForm } from "./new-research-form";
 
 export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
@@ -20,5 +24,12 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
     router.push(`/runs/${run.id}`);
   }
 
-  return <NewResearchForm onSubmit={start} />;
+  async function askAssistant(
+    brief: ResearchBriefInput,
+    messages: ResearchAssistantMessage[],
+  ) {
+    return api.askResearchAssistant(brief, messages);
+  }
+
+  return <NewResearchForm onSubmit={start} onAssist={askAssistant} />;
 }

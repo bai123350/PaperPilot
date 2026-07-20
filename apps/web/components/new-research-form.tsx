@@ -1,47 +1,83 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { ArrowRight, LockKeyhole, Paperclip } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { ArrowRight, Bot, LockKeyhole, Paperclip, Send, UserRound } from "lucide-react";
 
-import type { ResearchBriefInput } from "../lib/api";
+import type { ResearchAssistantMessage, ResearchBriefInput } from "../lib/api";
+
+const welcomeMessage: ResearchAssistantMessage = {
+  role: "assistant",
+  content: "我会结合上方的研究问题和 PICO 信息，帮你澄清范围、补充关键词或检查研究设计。填写研究问题后，可以直接告诉我你还不确定的地方。",
+};
 
 export function NewResearchForm({
   onSubmit,
+  onAssist,
 }: {
   onSubmit: (brief: ResearchBriefInput, files: File[]) => Promise<void>;
+  onAssist: (
+    brief: ResearchBriefInput,
+    messages: ResearchAssistantMessage[],
+  ) => Promise<ResearchAssistantMessage>;
 }) {
+  const formRef = useRef<HTMLFormElement>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [assistantInput, setAssistantInput] = useState("");
+  const [assistantPending, setAssistantPending] = useState(false);
+  const [assistantError, setAssistantError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ResearchAssistantMessage[]>([welcomeMessage]);
+
+  useEffect(() => {
+    const messageList = messagesRef.current;
+    if (messageList) messageList.scrollTop = messageList.scrollHeight;
+  }, [messages, assistantPending]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
     setError(null);
     const data = new FormData(event.currentTarget);
-    const value = (key: string) => String(data.get(key) ?? "").trim();
-    const list = (key: string) => value(key).split(/[,，]/).map((item) => item.trim()).filter(Boolean);
     try {
       const files = data
         .getAll("files")
         .filter((item): item is File => item instanceof File && item.size > 0);
-      await onSubmit({
-        question: value("question"),
-        population: value("population") || undefined,
-        intervention: value("intervention") || undefined,
-        comparison: value("comparison") || undefined,
-        outcomes: list("outcomes"),
-        keywords: list("keywords"),
-        date_from: Number(value("date_from")) || undefined,
-        date_to: Number(value("date_to")) || undefined,
-      }, files);
+      await onSubmit(toBrief(data), files);
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "提交失败");
       setPending(false);
     }
   }
 
+  async function askAssistant() {
+    const form = formRef.current;
+    const content = assistantInput.trim();
+    if (!form || !content || assistantPending) return;
+
+    if (!form.reportValidity()) {
+      setAssistantError("请先填写至少 20 个字符的研究问题，再开始讨论");
+      return;
+    }
+
+    const userMessage: ResearchAssistantMessage = { role: "user", content };
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
+    setAssistantInput("");
+    setAssistantError(null);
+    setAssistantPending(true);
+    try {
+      const reply = await onAssist(toBrief(new FormData(form)), nextMessages);
+      setMessages((current) => [...current, reply]);
+    } catch (reason) {
+      setAssistantError(reason instanceof Error ? reason.message : "研究助手回复失败");
+    } finally {
+      setAssistantPending(false);
+    }
+  }
+
   return (
-    <form className="research-form" onSubmit={submit}>
+    <form ref={formRef} className="research-form" onSubmit={submit}>
       <div className="form-section form-section-primary">
         <label htmlFor="question">研究问题</label>
         <textarea
@@ -77,19 +113,92 @@ export function NewResearchForm({
         <input id="files" name="files" type="file" accept="application/pdf,.pdf" multiple />
       </div>
 
+      <section className="research-assistant" aria-labelledby="research-assistant-title">
+        <div className="assistant-heading">
+          <Bot size={19} aria-hidden="true" />
+          <div>
+            <h2 id="research-assistant-title">研究问题助手</h2>
+            <p>围绕当前填写内容继续讨论</p>
+          </div>
+        </div>
+        <div
+          ref={messagesRef}
+          className="assistant-messages"
+          aria-live="polite"
+          aria-busy={assistantPending}
+        >
+          {messages.map((message, index) => (
+            <div className={`assistant-message message-${message.role}`} key={`${message.role}-${index}`}>
+              <span className="message-avatar" aria-hidden="true">
+                {message.role === "assistant" ? <Bot size={15} /> : <UserRound size={15} />}
+              </span>
+              <div><strong>{message.role === "assistant" ? "PaperPilot" : "你"}</strong><p>{message.content}</p></div>
+            </div>
+          ))}
+          {assistantPending ? (
+            <div className="assistant-message message-assistant assistant-thinking">
+              <span className="message-avatar" aria-hidden="true"><Bot size={15} /></span>
+              <div><strong>PaperPilot</strong><p>正在结合当前研究内容分析<span aria-hidden="true">...</span></p></div>
+            </div>
+          ) : null}
+        </div>
+        {assistantError ? <p className="assistant-error" role="alert">{assistantError}</p> : null}
+        <div className="assistant-composer">
+          <textarea
+            aria-label="给研究问题助手发送消息"
+            value={assistantInput}
+            onChange={(event) => setAssistantInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                void askAssistant();
+              }
+            }}
+            rows={2}
+            maxLength={4000}
+            placeholder="例如：这个问题的范围是否太宽？"
+          />
+          <button
+            className="assistant-send"
+            type="button"
+            onClick={() => void askAssistant()}
+            disabled={!assistantInput.trim() || assistantPending}
+            aria-label="发送消息"
+            title="发送消息"
+          >
+            <Send size={17} aria-hidden="true" />
+          </button>
+        </div>
+      </section>
+
       <div className="privacy-note">
         <LockKeyhole size={17} aria-hidden="true" />
-        <span>未发表原文件任务完成后最多保留 24 小时</span>
+        <span>对话仅用于完善当前研究；未发表原文件任务完成后最多保留 24 小时</span>
       </div>
       {error ? <p className="form-error" role="alert">{error}</p> : null}
       <div className="form-actions">
-        <button className="primary-button" type="submit" disabled={pending}>
+        <button className="primary-button" type="submit" disabled={pending || assistantPending}>
           {pending ? "正在创建研究..." : "开始研究"}
           <ArrowRight size={17} aria-hidden="true" />
         </button>
       </div>
     </form>
   );
+}
+
+function toBrief(data: FormData): ResearchBriefInput {
+  const value = (key: string) => String(data.get(key) ?? "").trim();
+  const list = (key: string) => value(key).split(/[,，]/).map((item) => item.trim()).filter(Boolean);
+  return {
+    question: value("question"),
+    population: value("population") || undefined,
+    intervention: value("intervention") || undefined,
+    comparison: value("comparison") || undefined,
+    outcomes: list("outcomes"),
+    keywords: list("keywords"),
+    date_from: Number(value("date_from")) || undefined,
+    date_to: Number(value("date_to")) || undefined,
+  };
 }
 
 function Field({ id, label, placeholder }: { id: string; label: string; placeholder: string }) {
