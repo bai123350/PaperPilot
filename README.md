@@ -49,7 +49,6 @@ Live research runs use DeepSeek for evidence-grounded report synthesis. Disable 
 provide the API key before starting the API. Install the declared API dependencies first:
 
 ```powershell
-cd E:\Project\PaperPilot
 uv pip install --python .venv\Scripts\python.exe -e "services/api[dev]"
 ```
 
