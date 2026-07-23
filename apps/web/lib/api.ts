@@ -48,6 +48,47 @@ export interface RunConversation {
   messages: RunConversationMessage[];
 }
 
+export type RunOperationStatus = "running" | "completed" | "failed";
+export type RunOperationTaskKind = "research_run" | "discussion" | "report_revision";
+export type RunOperationKind =
+  | "structure_question"
+  | "search_source"
+  | "deduplicate"
+  | "screen"
+  | "parse"
+  | "create_evidence"
+  | "synthesize"
+  | "recommend"
+  | "citation_audit"
+  | "save_report"
+  | "lookup_evidence"
+  | "grounded_response"
+  | "save_response"
+  | "revise_report"
+  | "revision_validation"
+  | "save_revision";
+
+export interface RunOperation {
+  id: string;
+  run_id: string;
+  sequence: number;
+  task_kind: RunOperationTaskKind;
+  operation_kind: RunOperationKind;
+  stage: string | null;
+  title: string;
+  summary: string;
+  status: RunOperationStatus;
+  metrics: Record<string, number>;
+  conversation_message_id: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface RunOperationList {
+  contract_version: "1.0";
+  operations: RunOperation[];
+}
+
 const tokenKey = "paperpilot_access_token";
 
 export class PaperPilotApi {
@@ -144,6 +185,63 @@ export class PaperPilotApi {
 
   async getRunConversation(id: string): Promise<RunConversation> {
     return this.authenticated<RunConversation>(`/v1/runs/${id}/conversation`);
+  }
+
+  async getRunOperations(id: string): Promise<RunOperationList> {
+    return this.authenticated<RunOperationList>(`/v1/runs/${id}/operations`);
+  }
+
+  async streamRunEvents(
+    id: string,
+    onOperation: (operation: RunOperation) => void,
+    onDone: (run: RunRecord) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const request = async (token: string) => fetch(`${this.baseUrl}/v1/runs/${id}/events`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "text/event-stream",
+      },
+      signal,
+    });
+    let response = await request(await this.ensureSession());
+    if (response.status === 401) {
+      localStorage.removeItem(tokenKey);
+      response = await request(await this.ensureSession());
+    }
+    if (!response.ok || !response.body) {
+      await this.read(response);
+      throw new Error("研究操作流暂时不可用");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const consume = (block: string) => {
+      let event = "message";
+      const data: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+      }
+      if (!data.length) return;
+      const payload = JSON.parse(data.join("\n"));
+      if (event === "operation") onOperation(payload as RunOperation);
+      if (event === "done") onDone(payload as RunRecord);
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        consume(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) consume(buffer);
   }
 
   async bootstrapRunConversation(

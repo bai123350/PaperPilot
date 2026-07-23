@@ -88,6 +88,9 @@ class RunEntity(Base):
     report_revisions: Mapped[list[ReportRevisionEntity]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
     )
+    operations: Mapped[list[RunOperationEntity]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
 
 
 class EvidenceEntity(Base):
@@ -110,6 +113,9 @@ class ConversationMessageEntity(Base):
     report_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     run: Mapped[RunEntity] = relationship(back_populates="conversation_messages")
+    operations: Mapped[list[RunOperationEntity]] = relationship(
+        back_populates="conversation_message", cascade="all, delete-orphan"
+    )
 
 
 class ReportRevisionEntity(Base):
@@ -123,6 +129,37 @@ class ReportRevisionEntity(Base):
     instruction: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     run: Mapped[RunEntity] = relationship(back_populates="report_revisions")
+
+
+class RunOperationEntity(Base):
+    __tablename__ = "run_operations"
+    __table_args__ = (
+        UniqueConstraint("run_id", "sequence", name="uq_run_operations_run_sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: uuid4().hex)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("research_runs.id", ondelete="CASCADE"), index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer)
+    task_kind: Mapped[str] = mapped_column(String(24))
+    operation_kind: Mapped[str] = mapped_column(String(48))
+    stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    title: Mapped[str] = mapped_column(String(160))
+    summary: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(16))
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    conversation_message_id: Mapped[str | None] = mapped_column(
+        ForeignKey("run_conversation_messages.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    run: Mapped[RunEntity] = relationship(back_populates="operations")
+    conversation_message: Mapped[ConversationMessageEntity | None] = relationship(
+        back_populates="operations"
+    )
 
 
 class Database:

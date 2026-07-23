@@ -2,24 +2,39 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from paperpilot.api.deps import current_user, get_session
 from paperpilot.api.routes.projects import owned_project
-from paperpilot.database import EvidenceEntity, ProjectEntity, RunEntity, UserEntity, utc_now
+from paperpilot.database import (
+    EvidenceEntity,
+    ProjectEntity,
+    RunEntity,
+    RunOperationEntity,
+    UserEntity,
+    utc_now,
+)
 from paperpilot.domain.models import ResearchBrief, RunStatus
 from paperpilot.domain.models import Report
+from paperpilot.domain.operations import RunOperation
 from paperpilot.models.deepseek import ModelProviderError
 from paperpilot.services.markdown_export import render_markdown
+from paperpilot.services.operation_recorder import operation_payload
 
 
 router = APIRouter(prefix="/v1", tags=["research-runs"])
+
+
+class RunOperationsResponse(BaseModel):
+    contract_version: Literal["1.0"] = "1.0"
+    operations: list[RunOperation]
 
 
 def owned_run(session: Session, user_id: str, run_id: str) -> RunEntity:
@@ -115,6 +130,23 @@ def get_run(
     return run_payload(owned_run(session, user.id, run_id))
 
 
+@router.get("/runs/{run_id}/operations", response_model=RunOperationsResponse)
+def get_run_operations(
+    run_id: str,
+    user: Annotated[UserEntity, Depends(current_user)],
+    session: Annotated[Session, Depends(get_session)],
+) -> RunOperationsResponse:
+    owned_run(session, user.id, run_id)
+    operations = session.scalars(
+        select(RunOperationEntity)
+        .where(RunOperationEntity.run_id == run_id)
+        .order_by(RunOperationEntity.sequence, RunOperationEntity.id)
+    )
+    return RunOperationsResponse(
+        operations=[operation_payload(operation) for operation in operations]
+    )
+
+
 @router.post("/runs/{run_id}/cancel")
 def cancel_run(
     run_id: str,
@@ -204,6 +236,7 @@ def stream_events(
 
     async def generate():
         delivered = 0
+        delivered_operations: dict[str, str] = {}
         while not await request.is_disconnected():
             with request.app.state.database.session() as stream_session:
                 run = owned_run(stream_session, user.id, run_id)
@@ -211,6 +244,22 @@ def stream_events(
                 for event in events[delivered:]:
                     yield {"event": "stage", "data": json.dumps(event)}
                 delivered = len(events)
+                operations = stream_session.scalars(
+                    select(RunOperationEntity)
+                    .where(RunOperationEntity.run_id == run_id)
+                    .order_by(RunOperationEntity.sequence, RunOperationEntity.id)
+                )
+                for operation in operations:
+                    payload = operation_payload(operation).model_dump(mode="json")
+                    fingerprint = json.dumps(payload, sort_keys=True, default=str)
+                    if delivered_operations.get(operation.id) == fingerprint:
+                        continue
+                    yield {
+                        "event": "operation",
+                        "id": operation.id,
+                        "data": json.dumps(payload),
+                    }
+                    delivered_operations[operation.id] = fingerprint
                 if run.status in {
                     RunStatus.COMPLETED.value,
                     RunStatus.FAILED.value,

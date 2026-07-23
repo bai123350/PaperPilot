@@ -14,7 +14,9 @@ from paperpilot.connectors.pubmed import PubMedConnector
 from paperpilot.connectors.private_materials import PrivateMaterial, PrivateMaterialConnector
 from paperpilot.database import Database, EvidenceEntity, RunEntity, UploadEntity
 from paperpilot.domain.models import ResearchBrief, RunStage, RunStatus
+from paperpilot.domain.operations import OperationKind, OperationTaskKind, OperationUpdate
 from paperpilot.services.pipeline import ResearchPipeline
+from paperpilot.services.operation_recorder import OperationRecorder
 from paperpilot.services.llm_synthesis import LlmReportSynthesizer
 from paperpilot.models.deepseek import DeepSeekModel, ModelProviderError
 from paperpilot.parsing.grobid import GrobidPdfParser
@@ -39,6 +41,7 @@ class RunService:
             connectors=self._connectors(run.project_id),
             synthesizer=self._synthesizer(),
         )
+        operation_recorder = OperationRecorder(self.database)
 
         def on_stage(stage: RunStage) -> None:
             with self.database.session() as stage_session:
@@ -52,7 +55,11 @@ class RunService:
 
         async def run_pipeline():
             try:
-                return await pipeline.run(brief, on_stage=on_stage)
+                return await pipeline.run(
+                    brief,
+                    on_stage=on_stage,
+                    on_operation=operation_recorder.bind(run_id),
+                )
             finally:
                 if pipeline.synthesizer:
                     await pipeline.synthesizer.aclose()
@@ -73,6 +80,18 @@ class RunService:
                         for item in report.evidence
                     ]
                 )
+            save_operation_id = operation_recorder.start(
+                run_id,
+                OperationUpdate(
+                    task_kind=OperationTaskKind.RESEARCH_RUN,
+                    operation_kind=OperationKind.SAVE_REPORT,
+                    stage=RunStage.AUDITING,
+                ),
+            )
+            operation_recorder.complete(
+                save_operation_id,
+                {"report_version": 1},
+            )
         except Exception as exc:
             with self.database.session() as session:
                 run = session.get(RunEntity, run_id)
