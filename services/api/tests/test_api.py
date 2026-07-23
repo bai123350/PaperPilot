@@ -143,6 +143,41 @@ def test_run_conversation_persists_and_revises_report_with_current_evidence(tmp_
         assert "外部验证" in revised_report["gaps"][-1]
 
 
+def test_project_runs_restore_history_and_streamed_reply_is_persisted(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        headers = login(client)
+        project = client.post(
+            "/v1/projects", headers=headers, json={"name": "Persistent chat"}
+        ).json()
+        run = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=headers,
+            json={"question": "What evidence supports longitudinal biomarker validation?"},
+        ).json()
+        first_message = "请先说明你将如何持续更新这个研究。"
+
+        response = client.post(
+            f"/v1/runs/{run['id']}/conversation/messages/stream",
+            headers=headers,
+            json={"content": first_message},
+        )
+
+        assert response.status_code == 200
+        assert "event: delta" in response.text
+        assert "event: complete" in response.text
+        runs = client.get(f"/v1/projects/{project['id']}/runs", headers=headers).json()
+        assert runs[0]["id"] == run["id"]
+        conversation = client.get(
+            f"/v1/runs/{run['id']}/conversation", headers=headers
+        ).json()
+        assert [message["role"] for message in conversation["messages"]] == [
+            "user",
+            "assistant",
+        ]
+        assert conversation["messages"][0]["content"] == first_message
+        assert conversation["messages"][1]["content"]
+
+
 def test_run_conversation_is_isolated_by_authenticated_user(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         owner = login(client, "conversation-owner@example.com")

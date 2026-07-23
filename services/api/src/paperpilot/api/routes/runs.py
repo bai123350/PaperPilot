@@ -12,7 +12,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from paperpilot.api.deps import current_user, get_session
 from paperpilot.api.routes.projects import owned_project
-from paperpilot.database import EvidenceEntity, ProjectEntity, RunEntity, UserEntity
+from paperpilot.database import EvidenceEntity, ProjectEntity, RunEntity, UserEntity, utc_now
 from paperpilot.domain.models import ResearchBrief, RunStatus
 from paperpilot.domain.models import Report
 from paperpilot.models.deepseek import ModelProviderError
@@ -54,7 +54,7 @@ def create_run(
     user: Annotated[UserEntity, Depends(current_user)],
     session: Annotated[Session, Depends(get_session)],
 ) -> dict:
-    owned_project(session, user.id, project_id)
+    project = owned_project(session, user.id, project_id)
     run = RunEntity(
         project_id=project_id,
         status=RunStatus.QUEUED.value,
@@ -62,9 +62,25 @@ def create_run(
         events=[],
     )
     session.add(run)
+    project.updated_at = utc_now()
     session.commit()
     session.refresh(run)
     return run_payload(run)
+
+
+@router.get("/projects/{project_id}/runs")
+def list_project_runs(
+    project_id: str,
+    user: Annotated[UserEntity, Depends(current_user)],
+    session: Annotated[Session, Depends(get_session)],
+) -> list[dict]:
+    owned_project(session, user.id, project_id)
+    runs = session.scalars(
+        select(RunEntity)
+        .where(RunEntity.project_id == project_id)
+        .order_by(RunEntity.updated_at.desc(), RunEntity.created_at.desc())
+    )
+    return [run_payload(run) for run in runs]
 
 
 @router.post("/runs/{run_id}/start", status_code=status.HTTP_202_ACCEPTED)

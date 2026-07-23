@@ -10,6 +10,7 @@ interface ResearchConversationProps {
   pending: boolean;
   canRevise: boolean;
   reportVersion: number;
+  error?: string | null;
   onSend: (content: string, action: "discuss" | "revise_report") => Promise<void>;
 }
 
@@ -18,6 +19,7 @@ export function ResearchConversation({
   pending,
   canRevise,
   reportVersion,
+  error,
   onSend,
 }: ResearchConversationProps) {
   const listRef = useRef<HTMLDivElement>(null);
@@ -54,23 +56,35 @@ export function ResearchConversation({
           </div>
         ) : null}
         {messages.map((message) => (
-          <div className={`conversation-message message-${message.role}`} key={message.id}>
+          <div
+            className={`conversation-message message-${message.role}${pending && message === messages.at(-1) && message.role === "assistant" ? " message-streaming" : ""}`}
+            key={message.id}
+          >
             <span className="message-avatar" aria-hidden="true">
               {message.role === "assistant" ? <Bot size={14} /> : <UserRound size={14} />}
             </span>
             <div>
               <strong>{message.role === "assistant" ? "PaperPilot" : "你"}</strong>
-              <p>{message.content}</p>
+              <p>
+                {message.content}
+                {pending && message === messages.at(-1) && message.role === "assistant" ? (
+                  message.content ? <span className="stream-caret" aria-hidden="true" /> : (
+                    <span className="stream-dots" aria-label="PaperPilot 正在生成回复">
+                      <i /><i /><i />
+                    </span>
+                  )
+                ) : null}
+              </p>
               {message.evidence_ids.length ? (
                 <small>引用 {message.evidence_ids.length} 条当前研究证据</small>
               ) : null}
             </div>
           </div>
         ))}
-        {pending ? <p className="conversation-thinking">正在核对当前研究上下文...</p> : null}
       </div>
 
       <div className="conversation-compose">
+        {error ? <p className="conversation-error" role="alert">{error}</p> : null}
         {canRevise ? (
           <div className="conversation-mode" aria-label="消息处理方式">
             <button

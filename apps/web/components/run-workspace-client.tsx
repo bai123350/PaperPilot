@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Printer } from "lucide-react";
 
 import { api, type RunRecord } from "../lib/api";
@@ -12,12 +12,64 @@ import { ResearchConversation } from "./research-conversation";
 
 export function RunWorkspaceClient({ runId }: { runId: string }) {
   const startRequested = useRef(false);
+  const replyRequested = useRef(false);
+  const streamActive = useRef(false);
   const [run, setRun] = useState<RunRecord | null>(null);
   const [report, setReport] = useState<ReportViewModel | null>(null);
   const [messages, setMessages] = useState<RunConversationMessage[]>([]);
   const [reportVersion, setReportVersion] = useState(1);
   const [conversationPending, setConversationPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [conversationError, setConversationError] = useState<string | null>(null);
+
+  const streamReply = useCallback(async (content: string, appendUser: boolean) => {
+    const optimisticUser: RunConversationMessage = {
+      id: `pending-user-${Date.now()}`,
+      role: "user",
+      content,
+      evidence_ids: [],
+      report_version: null,
+      created_at: new Date().toISOString(),
+    };
+    const optimisticAssistant: RunConversationMessage = {
+      id: `pending-assistant-${Date.now()}`,
+      role: "assistant",
+      content: "",
+      evidence_ids: [],
+      report_version: null,
+      created_at: new Date().toISOString(),
+    };
+    const assistantId = optimisticAssistant.id;
+    setMessages((current) => appendUser
+      ? [...current, optimisticUser, optimisticAssistant]
+      : [...current, optimisticAssistant]
+    );
+    setConversationPending(true);
+    streamActive.current = true;
+    setConversationError(null);
+    try {
+      const response = await api.streamRunMessage(
+        runId,
+        content,
+        (delta) => setMessages((current) => current.map((message) =>
+          message.id === assistantId
+            ? { ...message, content: message.content + delta }
+            : message
+        )),
+        appendUser,
+      );
+      const conversation = await api.getRunConversation(runId);
+      setMessages(conversation.messages);
+      setReportVersion(response.report_version);
+    } catch (reason) {
+      setMessages((current) => current.filter((message) => message.id !== assistantId));
+      setConversationError(reason instanceof Error ? reason.message : "消息发送失败");
+      replyRequested.current = false;
+    } finally {
+      streamActive.current = false;
+      setConversationPending(false);
+    }
+  }, [runId]);
 
   useEffect(() => {
     let active = true;
@@ -31,12 +83,17 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
         ]);
         if (!active) return;
         setRun(nextRun);
-        setMessages(conversation.messages);
+        if (!streamActive.current) setMessages(conversation.messages);
         setReportVersion(conversation.report_version);
+        const latestMessage = conversation.messages.at(-1);
+        if (latestMessage?.role === "user" && !replyRequested.current && !streamActive.current) {
+          replyRequested.current = true;
+          void streamReply(latestMessage.content, false);
+        }
         if (nextRun.status === "queued" && !startRequested.current) {
           startRequested.current = true;
           void api.startRun(runId).then(refresh).catch((reason) => {
-            if (active) setError(reason instanceof Error ? reason.message : "研究启动失败");
+            if (active) setLoadError(reason instanceof Error ? reason.message : "研究启动失败");
           });
           return;
         }
@@ -49,7 +106,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
           timer = setTimeout(refresh, 1200);
         }
       } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : "运行加载失败");
+        if (active) setLoadError(reason instanceof Error ? reason.message : "运行加载失败");
       }
     }
 
@@ -58,9 +115,9 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [runId]);
+  }, [runId, streamReply]);
 
-  if (error) return <div className="error-banner">{error}</div>;
+  if (loadError) return <div className="error-banner">{loadError}</div>;
   if (!run) return <div className="run-loading"><span /><p>正在读取研究状态</p></div>;
   return (
     <>
@@ -71,21 +128,26 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
         </div>
       ) : null}
       <div className="run-dialog-layout">
-        <RunWorkspaceView run={run} report={report} />
         <ResearchConversation
           messages={messages}
           pending={conversationPending}
           canRevise={run.status === "completed" && Boolean(report)}
           reportVersion={reportVersion}
+          error={conversationError}
           onSend={sendMessage}
         />
+        <RunWorkspaceView run={run} report={report} />
       </div>
     </>
   );
 
   async function sendMessage(content: string, action: "discuss" | "revise_report") {
+    if (action === "discuss") {
+      await streamReply(content, true);
+      return;
+    }
     setConversationPending(true);
-    setError(null);
+    setConversationError(null);
     try {
       const response = await api.sendRunMessage(runId, content, action);
       const conversation = await api.getRunConversation(runId);
@@ -97,7 +159,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
         setRun((current) => current ? { ...current, report_version: response.report_version } : current);
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "消息发送失败");
+      setConversationError(reason instanceof Error ? reason.message : "消息发送失败");
     } finally {
       setConversationPending(false);
     }

@@ -41,4 +41,29 @@ describe("PaperPilotApi", () => {
     });
     expect(localStorage.getItem("paperpilot_access_token")).toBe("token-2");
   });
+
+  it("delivers streamed assistant deltas before the persisted message", async () => {
+    localStorage.setItem("paperpilot_access_token", "token-1");
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'event: delta\r\ndata: {"content":"第一段"}\r\n\r\n',
+        ));
+        controller.enqueue(encoder.encode(
+          'event: delta\r\ndata: {"content":"第二段"}\r\n\r\n' +
+          'event: complete\r\ndata: {"message":{"id":"message-1","role":"assistant","content":"第一段第二段","evidence_ids":[],"report_version":1,"created_at":"2026-07-21T00:00:00Z"},"report_version":1}\r\n\r\n',
+        ));
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(body, { status: 200 }));
+    const onDelta = vi.fn();
+    const api = new PaperPilotApi("http://api.test");
+
+    const result = await api.streamRunMessage("run-1", "继续讨论", onDelta);
+
+    expect(onDelta.mock.calls.map(([value]) => value)).toEqual(["第一段", "第二段"]);
+    expect(result.message.content).toBe("第一段第二段");
+  });
 });

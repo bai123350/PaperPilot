@@ -36,7 +36,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
       <div className="main-frame">
-        <header className="topbar">
+        <header className="topbar" suppressHydrationWarning>
           <span className="topbar-context">Research workspace</span>
           <div className="researcher-avatar" aria-label="当前用户">PR</div>
         </header>
