@@ -99,6 +99,26 @@ async def test_deepseek_model_sends_conversation_and_returns_text() -> None:
     assert reply == "建议明确主要结局。"
 
 
+async def test_deepseek_model_streams_text_deltas() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["stream"] is True
+        chunks = (
+            'data: {"choices":[{"delta":{"content":"第一段"}}]}\n\n'
+            'data: {"choices":[{"delta":{"content":"第二段"}}]}\n\n'
+            "data: [DONE]\n\n"
+        )
+        return httpx.Response(200, text=chunks, headers={"content-type": "text/event-stream"})
+
+    model = deepseek_model(handler)
+
+    parts = [part async for part in model.stream_text(
+        "Continue the research", [{"role": "user", "content": "继续讨论"}]
+    )]
+
+    assert parts == ["第一段", "第二段"]
+
+
 @pytest.mark.parametrize(
     ("response", "message"),
     [

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import AsyncIterator
 from typing import Any
 
 import openai
@@ -140,6 +141,36 @@ class DeepSeekModel:
         if not isinstance(content, str) or not content.strip():
             raise ModelResponseError("DeepSeek returned invalid message content")
         return content.strip()
+
+    async def stream_text(
+        self, system_prompt: str, messages: list[dict[str, str]]
+    ) -> AsyncIterator[str]:
+        try:
+            stream = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "system", "content": system_prompt}, *messages],
+                stream=True,
+                temperature=0.2,
+                reasoning_effort="high",
+                extra_body={"thinking": {"type": "enabled"}},
+            )
+            async for chunk in stream:
+                try:
+                    content = chunk.choices[0].delta.content
+                except (AttributeError, IndexError, TypeError):
+                    continue
+                if isinstance(content, str) and content:
+                    yield content
+        except (openai.APITimeoutError, openai.APIConnectionError):
+            raise TransientModelProviderError("DeepSeek is temporarily unavailable") from None
+        except openai.APIStatusError as exc:
+            if exc.status_code == 429 or exc.status_code >= 500:
+                raise TransientModelProviderError("DeepSeek is temporarily unavailable") from None
+            raise ModelProviderError(
+                f"DeepSeek request rejected with HTTP {exc.status_code}"
+            ) from None
+        except openai.APIError:
+            raise ModelProviderError("DeepSeek request failed") from None
 
     async def aclose(self) -> None:
         if self._owns_client:

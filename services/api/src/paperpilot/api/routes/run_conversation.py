@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Annotated, Literal
 
@@ -7,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 from paperpilot.api.deps import current_user, get_session
 from paperpilot.api.routes.runs import owned_run
@@ -44,6 +47,12 @@ class SendMessageRequest(BaseModel):
     contract_version: Literal["1.0"] = "1.0"
     content: str = Field(min_length=1, max_length=4000)
     action: Literal["discuss", "revise_report"] = "discuss"
+
+
+class StreamMessageRequest(BaseModel):
+    contract_version: Literal["1.0"] = "1.0"
+    content: str = Field(min_length=1, max_length=4000)
+    append_user: bool = True
 
 
 class SendMessageResponse(BaseModel):
@@ -195,6 +204,152 @@ async def send_message(
         report_updated=bool(report_updated),
         report_version=run.report_version,
     )
+
+
+@router.post("/messages/stream")
+async def stream_message(
+    run_id: str,
+    payload: StreamMessageRequest,
+    request: Request,
+    user: Annotated[UserEntity, Depends(current_user)],
+    session: Annotated[Session, Depends(get_session)],
+) -> EventSourceResponse:
+    run = owned_run(session, user.id, run_id)
+    content = payload.content.strip()
+    if payload.append_user:
+        session.add(
+            ConversationMessageEntity(
+                run_id=run_id,
+                role="user",
+                content=content,
+                evidence_ids=[],
+                report_version=run.report_version if run.report else None,
+            )
+        )
+        run.project.updated_at = datetime.now(timezone.utc)
+        session.commit()
+    else:
+        latest = session.scalar(
+            select(ConversationMessageEntity)
+            .where(ConversationMessageEntity.run_id == run_id)
+            .order_by(ConversationMessageEntity.created_at.desc(), ConversationMessageEntity.id.desc())
+            .limit(1)
+        )
+        if not latest or latest.role != "user" or latest.content != content:
+            raise HTTPException(status_code=409, detail="没有可继续回复的用户消息")
+
+    async def generate():
+        model: DeepSeekModel | None = None
+        try:
+            with request.app.state.database.session() as stream_session:
+                current_run = owned_run(stream_session, user.id, run_id)
+                recent = list(
+                    stream_session.scalars(
+                        select(ConversationMessageEntity)
+                        .where(ConversationMessageEntity.run_id == run_id)
+                        .order_by(ConversationMessageEntity.created_at.desc())
+                        .limit(12)
+                    )
+                )[::-1]
+                evidence = list(
+                    stream_session.scalars(
+                        select(EvidenceEntity).where(EvidenceEntity.run_id == run_id)
+                    )
+                )
+                if request.app.state.settings.demo_mode:
+                    reply, _ = _demo_response(
+                        current_run,
+                        SendMessageRequest(content=content),
+                        evidence,
+                    )
+                    chunks = [reply.content[index : index + 12] for index in range(0, len(reply.content), 12)]
+
+                    async def demo_chunks():
+                        for chunk in chunks:
+                            await asyncio.sleep(0)
+                            yield chunk
+
+                    source = demo_chunks()
+                else:
+                    model = DeepSeekModel(
+                        api_key=request.app.state.settings.deepseek_api_key,
+                        base_url=request.app.state.settings.deepseek_base_url,
+                        model=request.app.state.settings.deepseek_model,
+                    )
+                    context = {
+                        "run": {
+                            "status": current_run.status,
+                            "stage": current_run.stage,
+                            "brief": current_run.brief,
+                        },
+                        "report": (
+                            Report.model_validate(current_run.report).model_dump(
+                                mode="json", exclude={"evidence", "papers"}
+                            )
+                            if current_run.report
+                            else None
+                        ),
+                        "evidence": [
+                            {
+                                "id": item.id,
+                                "excerpt": item.payload.get("excerpt"),
+                                "locator": item.payload.get("locator"),
+                                "evidence_type": item.payload.get("evidence_type"),
+                            }
+                            for item in evidence
+                        ],
+                    }
+                    source = model.stream_text(
+                        (
+                            "You are a biomedical research assistant. Reply in concise Simplified "
+                            "Chinese. Use only the supplied run context and evidence. Before the report "
+                            "is complete, clearly distinguish progress updates from evidence-backed "
+                            "conclusions. Never provide diagnosis or treatment advice. Do not invent or "
+                            "print evidence identifiers. Current run context: "
+                            f"{json.dumps(context, ensure_ascii=False)}"
+                        ),
+                        [{"role": item.role, "content": item.content} for item in recent],
+                    )
+
+                parts: list[str] = []
+                async for chunk in source:
+                    parts.append(chunk)
+                    if sum(len(part) for part in parts) > 6000:
+                        raise ModelResponseError("Model reply exceeded the conversation limit")
+                    yield {"event": "delta", "data": json.dumps({"content": chunk}, ensure_ascii=False)}
+
+                reply_content = "".join(parts).strip()
+                if not reply_content:
+                    raise ModelResponseError("Model returned an empty reply")
+                assistant_message = ConversationMessageEntity(
+                    run_id=run_id,
+                    role="assistant",
+                    content=reply_content,
+                    evidence_ids=[],
+                    report_version=current_run.report_version if current_run.report else None,
+                )
+                stream_session.add(assistant_message)
+                current_run.project.updated_at = datetime.now(timezone.utc)
+                stream_session.flush()
+                message = _message_payload(assistant_message).model_dump(mode="json")
+                stream_session.commit()
+                yield {
+                    "event": "complete",
+                    "data": json.dumps(
+                        {"message": message, "report_version": current_run.report_version},
+                        ensure_ascii=False,
+                    ),
+                }
+        except ModelProviderError:
+            yield {
+                "event": "error",
+                "data": json.dumps({"detail": "研究对话暂时不可用，请稍后重试"}, ensure_ascii=False),
+            }
+        finally:
+            if model is not None:
+                await model.aclose()
+
+    return EventSourceResponse(generate())
 
 
 def _demo_response(

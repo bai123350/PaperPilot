@@ -92,6 +92,10 @@ export class PaperPilotApi {
     });
   }
 
+  async listProjectRuns(projectId: string): Promise<RunRecord[]> {
+    return this.authenticated<RunRecord[]>(`/v1/projects/${projectId}/runs`);
+  }
+
   async askResearchAssistant(
     brief: ResearchBriefInput,
     messages: ResearchAssistantMessage[],
@@ -161,6 +165,74 @@ export class PaperPilotApi {
       method: "POST",
       body: JSON.stringify({ contract_version: "1.0", content, action }),
     });
+  }
+
+  async streamRunMessage(
+    id: string,
+    content: string,
+    onDelta: (content: string) => void,
+    appendUser = true,
+  ): Promise<{ message: RunConversationMessage; report_version: number }> {
+    const request = async (token: string) => fetch(
+      `${this.baseUrl}/v1/runs/${id}/conversation/messages/stream`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          contract_version: "1.0",
+          content,
+          append_user: appendUser,
+        }),
+      },
+    );
+
+    let response = await request(await this.ensureSession());
+    if (response.status === 401) {
+      localStorage.removeItem(tokenKey);
+      response = await request(await this.ensureSession());
+    }
+    if (!response.ok || !response.body) {
+      await this.read(response);
+      throw new Error("研究对话暂时不可用");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let result: { message: RunConversationMessage; report_version: number } | null = null;
+
+    const consume = (block: string) => {
+      let event = "message";
+      const data: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+      }
+      if (!data.length) return;
+      const payload = JSON.parse(data.join("\n"));
+      if (event === "delta") onDelta(payload.content);
+      if (event === "complete") result = payload;
+      if (event === "error") throw new Error(payload.detail ?? "研究对话暂时不可用");
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        consume(buffer.slice(0, boundary));
+        buffer = buffer.slice(boundary + 2);
+        boundary = buffer.indexOf("\n\n");
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) consume(buffer);
+    if (!result) throw new Error("研究对话流意外中断");
+    return result;
   }
 
   async downloadMarkdown(id: string): Promise<Blob> {

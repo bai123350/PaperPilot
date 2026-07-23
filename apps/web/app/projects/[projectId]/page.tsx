@@ -4,8 +4,8 @@ export default async function ProjectPage({ params }: { params: Promise<{ projec
   const { projectId } = await params;
   return (
     <>
-      <section className="page-heading narrow-heading">
-        <div><span className="eyebrow">Existing project</span><h1>发起新的研究运行</h1><p>保留项目边界，生成独立版本报告</p></div>
+      <section className="page-heading narrow-heading chat-page-heading">
+        <div><span className="eyebrow">Existing project</span><h1>继续研究对话</h1><p>对话、研究进度和报告都在当前页面持续更新</p></div>
       </section>
       <NewProjectWorkflow projectId={projectId} />
     </>

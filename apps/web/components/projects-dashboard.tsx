@@ -30,15 +30,21 @@ export function ProjectsDashboard() {
         <Link className="primary-button" href="/projects/new"><Plus size={17} />新建研究</Link>
       </section>
 
-      <section className="metrics-band" aria-label="工作区概览">
-        <div><Database size={19} /><span><strong>{projects.length}</strong><small>研究项目</small></span></div>
-        <div><FileCheck2 size={19} /><span><strong>{projects.length ? "100%" : "—"}</strong><small>证据关联</small></span></div>
-        <div><ShieldCheck size={19} /><span><strong>24h</strong><small>原文件保留</small></span></div>
+      <section className="metrics-band" aria-label="工作区概览" suppressHydrationWarning>
+        <div suppressHydrationWarning><Database size={19} /><span><strong>{projects.length}</strong><small>研究项目</small></span></div>
+        <div suppressHydrationWarning><FileCheck2 size={19} /><span><strong>{projects.length ? "100%" : "—"}</strong><small>证据关联</small></span></div>
+        <div suppressHydrationWarning><ShieldCheck size={19} /><span><strong>24h</strong><small>原文件保留</small></span></div>
       </section>
 
       <section className="section-block">
         <div className="section-title-row"><h2>最近项目</h2><Link href="/projects/new">创建新项目 <ArrowRight size={15} /></Link></div>
-        {loading ? <div className="loading-lines"><span /><span /><span /></div> : null}
+        {loading ? (
+          <div className="loading-lines">
+            <span suppressHydrationWarning />
+            <span suppressHydrationWarning />
+            <span suppressHydrationWarning />
+          </div>
+        ) : null}
         {error ? <div className="error-banner">{error}</div> : null}
         {!loading && !error ? <ProjectGrid projects={projects} /> : null}
       </section>
