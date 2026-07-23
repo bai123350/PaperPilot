@@ -3,28 +3,35 @@
 import { useEffect, useRef, useState } from "react";
 import { Bot, FilePenLine, Send, UserRound } from "lucide-react";
 
-import type { RunConversationMessage } from "../lib/api";
+import type { RunConversationMessage, RunOperation } from "../lib/api";
+import { mergeRunTimeline } from "../lib/run-timeline";
+import { OperationCard } from "./operation-card";
 
 interface ResearchConversationProps {
   messages: RunConversationMessage[];
+  operations: RunOperation[];
   pending: boolean;
   canRevise: boolean;
   reportVersion: number;
   error?: string | null;
   onSend: (content: string, action: "discuss" | "revise_report") => Promise<void>;
+  onRetry?: () => void;
 }
 
 export function ResearchConversation({
   messages,
+  operations,
   pending,
   canRevise,
   reportVersion,
   error,
   onSend,
+  onRetry,
 }: ResearchConversationProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const [content, setContent] = useState("");
   const [action, setAction] = useState<"discuss" | "revise_report">("discuss");
+  const timeline = mergeRunTimeline(messages, operations);
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -49,34 +56,36 @@ export function ResearchConversation({
       </header>
 
       <div ref={listRef} className="conversation-messages" aria-live="polite" aria-busy={pending}>
-        {messages.length === 0 ? (
+        {timeline.length === 0 ? (
           <div className="conversation-empty">
             <Bot size={20} aria-hidden="true" />
             <p>可以继续补充研究要求。研究完成后，对话会严格基于已纳入证据。</p>
           </div>
         ) : null}
-        {messages.map((message) => (
+        {timeline.map((entry) => entry.kind === "operation" ? (
+          <OperationCard key={entry.id} operation={entry.operation} onRetry={onRetry} />
+        ) : (
           <div
-            className={`conversation-message message-${message.role}${pending && message === messages.at(-1) && message.role === "assistant" ? " message-streaming" : ""}`}
-            key={message.id}
+            className={`conversation-message message-${entry.message.role}${pending && entry.message === messages.at(-1) && entry.message.role === "assistant" ? " message-streaming" : ""}`}
+            key={entry.id}
           >
             <span className="message-avatar" aria-hidden="true">
-              {message.role === "assistant" ? <Bot size={14} /> : <UserRound size={14} />}
+              {entry.message.role === "assistant" ? <Bot size={14} /> : <UserRound size={14} />}
             </span>
             <div>
-              <strong>{message.role === "assistant" ? "PaperPilot" : "你"}</strong>
+              <strong>{entry.message.role === "assistant" ? "PaperPilot" : "你"}</strong>
               <p>
-                {message.content}
-                {pending && message === messages.at(-1) && message.role === "assistant" ? (
-                  message.content ? <span className="stream-caret" aria-hidden="true" /> : (
+                {entry.message.content}
+                {pending && entry.message === messages.at(-1) && entry.message.role === "assistant" ? (
+                  entry.message.content ? <span className="stream-caret" aria-hidden="true" /> : (
                     <span className="stream-dots" aria-label="PaperPilot 正在生成回复">
                       <i /><i /><i />
                     </span>
                   )
                 ) : null}
               </p>
-              {message.evidence_ids.length ? (
-                <small>引用 {message.evidence_ids.length} 条当前研究证据</small>
+              {entry.message.evidence_ids.length ? (
+                <small>引用 {entry.message.evidence_ids.length} 条当前研究证据</small>
               ) : null}
             </div>
           </div>

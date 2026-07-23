@@ -25,7 +25,13 @@ def test_initial_migration_builds_the_schema_from_zero(tmp_path: Path) -> None:
         "evidence_records",
         "run_conversation_messages",
         "report_revisions",
+        "run_operations",
     } <= tables
+    operation_constraints = {
+        item["name"]
+        for item in inspect(create_engine(database_url)).get_unique_constraints("run_operations")
+    }
+    assert "uq_run_operations_run_sequence" in operation_constraints
 
 
 def test_conversation_migration_handles_an_auto_created_legacy_database(tmp_path: Path) -> None:
@@ -44,6 +50,6 @@ def test_conversation_migration_handles_an_auto_created_legacy_database(tmp_path
     assert "report_version" in {
         column["name"] for column in inspector.get_columns("research_runs")
     }
-    assert {"run_conversation_messages", "report_revisions"} <= set(
+    assert {"run_conversation_messages", "report_revisions", "run_operations"} <= set(
         inspector.get_table_names()
     )

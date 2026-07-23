@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from paperpilot.api.app import create_app
 from paperpilot.config import Settings
-from paperpilot.database import RunEntity
+from paperpilot.database import RunEntity, RunOperationEntity
 
 
 def build_client(tmp_path: Path) -> TestClient:
@@ -141,6 +141,20 @@ def test_run_conversation_persists_and_revises_report_with_current_evidence(tmp_
         assert conversation["report_version"] == 2
         revised_report = client.get(f"/v1/runs/{run['id']}/report", headers=headers).json()
         assert "外部验证" in revised_report["gaps"][-1]
+        operations = client.get(
+            f"/v1/runs/{run['id']}/operations", headers=headers
+        ).json()["operations"]
+        revision_operations = [
+            item for item in operations if item["task_kind"] == "report_revision"
+        ]
+        assert [item["operation_kind"] for item in revision_operations] == [
+            "lookup_evidence",
+            "revise_report",
+            "revision_validation",
+            "save_revision",
+        ]
+        assert revision_operations[-1]["metrics"]["report_version"] == 2
+        assert all(item["status"] == "completed" for item in revision_operations)
 
 
 def test_project_runs_restore_history_and_streamed_reply_is_persisted(tmp_path: Path) -> None:
@@ -176,6 +190,22 @@ def test_project_runs_restore_history_and_streamed_reply_is_persisted(tmp_path: 
         ]
         assert conversation["messages"][0]["content"] == first_message
         assert conversation["messages"][1]["content"]
+        operations = client.get(
+            f"/v1/runs/{run['id']}/operations", headers=headers
+        ).json()["operations"]
+        discussion_operations = [
+            item for item in operations if item["task_kind"] == "discussion"
+        ]
+        assert [item["operation_kind"] for item in discussion_operations] == [
+            "lookup_evidence",
+            "grounded_response",
+            "citation_audit",
+            "save_response",
+        ]
+        assert all(
+            item["conversation_message_id"] == conversation["messages"][0]["id"]
+            for item in discussion_operations
+        )
 
 
 def test_run_conversation_is_isolated_by_authenticated_user(tmp_path: Path) -> None:
@@ -194,6 +224,75 @@ def test_run_conversation_is_isolated_by_authenticated_user(tmp_path: Path) -> N
         assert client.get(
             f"/v1/runs/{run['id']}/conversation", headers=stranger
         ).status_code == 404
+
+
+def test_run_operations_are_versioned_ordered_isolated_and_streamed(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        owner = login(client, "operation-owner@example.com")
+        stranger = login(client, "operation-stranger@example.com")
+        project = client.post(
+            "/v1/projects", headers=owner, json={"name": "Operation timeline"}
+        ).json()
+        run = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=owner,
+            json={"question": "What evidence supports durable biomarker validation?"},
+        ).json()
+        run = start_run(client, owner, run["id"])
+
+        response = client.get(f"/v1/runs/{run['id']}/operations", headers=owner)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["contract_version"] == "1.0"
+        assert body["operations"]
+        assert [item["sequence"] for item in body["operations"]] == sorted(
+            item["sequence"] for item in body["operations"]
+        )
+        assert set(body["operations"][0]) == {
+            "id",
+            "run_id",
+            "sequence",
+            "task_kind",
+            "operation_kind",
+            "stage",
+            "title",
+            "summary",
+            "status",
+            "metrics",
+            "conversation_message_id",
+            "started_at",
+            "completed_at",
+        }
+        assert client.get(
+            f"/v1/runs/{run['id']}/operations", headers=stranger
+        ).status_code == 404
+
+        stream = client.get(f"/v1/runs/{run['id']}/events", headers=owner)
+        assert stream.status_code == 200
+        assert "event: operation" in stream.text
+        assert f"id: {body['operations'][0]['id']}" in stream.text
+
+
+def test_deleting_project_cascades_to_run_operations(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        headers = login(client)
+        project = client.post(
+            "/v1/projects", headers=headers, json={"name": "Disposable operations"}
+        ).json()
+        run = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=headers,
+            json={"question": "What evidence supports deletion-safe operation history?"},
+        ).json()
+        run = start_run(client, headers, run["id"])
+        assert client.get(
+            f"/v1/runs/{run['id']}/operations", headers=headers
+        ).status_code == 200
+
+        assert client.delete(f"/v1/projects/{project['id']}", headers=headers).status_code == 204
+        with client.app.state.database.session() as session:
+            assert session.query(RunOperationEntity).count() == 0
 
 
 def test_projects_are_isolated_by_authenticated_user(tmp_path: Path) -> None:

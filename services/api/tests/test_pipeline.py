@@ -1,6 +1,7 @@
 import httpx
 
 from paperpilot.domain.models import Paper, ResearchBrief, RunStage
+from paperpilot.domain.operations import OperationUpdate
 from paperpilot.services.pipeline import ResearchPipeline
 
 
@@ -62,13 +63,33 @@ class StubSynthesizer:
         }
 
 
+class OperationCollector:
+    def __init__(self) -> None:
+        self.started: dict[str, OperationUpdate] = {}
+        self.completed: list[tuple[OperationUpdate, dict[str, int]]] = []
+        self.failed: list[str] = []
+
+    def start(self, update: OperationUpdate) -> str:
+        operation_id = f"operation-{len(self.started) + 1}"
+        self.started[operation_id] = update
+        return operation_id
+
+    def complete(self, operation_id: str, metrics: dict[str, int] | None = None) -> None:
+        self.completed.append((self.started[operation_id], metrics or {}))
+
+    def fail(self, operation_id: str, error_category: str) -> None:
+        self.failed.append(error_category)
+
+
 async def test_pipeline_emits_ordered_stages_and_builds_an_auditable_report() -> None:
     stages: list[RunStage] = []
+    operations = OperationCollector()
     pipeline = ResearchPipeline(connectors=[StubConnector()])
 
     report = await pipeline.run(
         ResearchBrief(question="What is the evidence for circulating biomarkers in treatment response?"),
         on_stage=lambda stage: stages.append(stage),
+        on_operation=operations,
     )
 
     assert stages == list(RunStage)
@@ -77,6 +98,23 @@ async def test_pipeline_emits_ordered_stages_and_builds_an_auditable_report() ->
     assert all(claim.evidence_ids for claim in report.claims)
     assert len(report.recommendations) == 3
     assert all(item.evidence_ids and item.stop_condition for item in report.recommendations)
+    assert [update.operation_kind.value for update, _ in operations.completed] == [
+        "structure_question",
+        "search_source",
+        "deduplicate",
+        "screen",
+        "parse",
+        "create_evidence",
+        "synthesize",
+        "recommend",
+        "citation_audit",
+    ]
+    completed_metrics = {
+        update.operation_kind.value: metrics for update, metrics in operations.completed
+    }
+    assert completed_metrics["search_source"]["candidate_count"] == 1
+    assert completed_metrics["create_evidence"]["evidence_count"] == 1
+    assert completed_metrics["recommend"]["recommendation_count"] == 3
 
 
 async def test_pipeline_uses_the_configured_evidence_synthesizer() -> None:

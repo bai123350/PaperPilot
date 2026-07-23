@@ -14,7 +14,8 @@ test("creates an evidence report and opens its source record", async ({ page }, 
 
   await expect(page).toHaveURL(/\/projects\/[^/]+$/);
   await expect(page.getByRole("heading", { name: "研究对话" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "研究报告", exact: true })).toBeVisible();
+  await expect(page.getByRole("article", { name: /研究操作：/ }).first()).toBeVisible();
+  await expect(page.getByText(/Evidence-first report/)).toBeVisible();
   await expect(page.getByTestId("recommendation-card")).toHaveCount(3);
   await page.getByRole("button", { name: "查看证据" }).click();
   await expect(page.getByRole("complementary", { name: "证据详情" })).toBeVisible();
@@ -22,4 +23,7 @@ test("creates an evidence report and opens its source record", async ({ page }, 
   await page.screenshot({ path: testInfo.outputPath("report-with-evidence.png"), fullPage: true });
   await page.getByRole("button", { name: "关闭证据" }).click();
   await page.screenshot({ path: testInfo.outputPath("report-workspace.png") });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBe(true);
 });

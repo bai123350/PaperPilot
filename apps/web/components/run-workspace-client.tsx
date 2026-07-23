@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Printer } from "lucide-react";
 
-import { api, type RunRecord } from "../lib/api";
+import { api, type RunOperation, type RunRecord } from "../lib/api";
 import type { RunConversationMessage } from "../lib/api";
 import { mapReport } from "../lib/report-mapper";
 import type { ReportViewModel } from "../lib/types";
@@ -17,6 +17,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
   const [run, setRun] = useState<RunRecord | null>(null);
   const [report, setReport] = useState<ReportViewModel | null>(null);
   const [messages, setMessages] = useState<RunConversationMessage[]>([]);
+  const [operations, setOperations] = useState<RunOperation[]>([]);
   const [reportVersion, setReportVersion] = useState(1);
   const [conversationPending, setConversationPending] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -61,6 +62,8 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
       const conversation = await api.getRunConversation(runId);
       setMessages(conversation.messages);
       setReportVersion(response.report_version);
+      const nextOperations = await loadRunOperations(runId);
+      if (nextOperations) setOperations(nextOperations);
     } catch (reason) {
       setMessages((current) => current.filter((message) => message.id !== assistantId));
       setConversationError(reason instanceof Error ? reason.message : "消息发送失败");
@@ -85,6 +88,8 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
         setRun(nextRun);
         if (!streamActive.current) setMessages(conversation.messages);
         setReportVersion(conversation.report_version);
+        const nextOperations = await loadRunOperations(runId);
+        if (active && nextOperations) setOperations(nextOperations);
         const latestMessage = conversation.messages.at(-1);
         if (latestMessage?.role === "user" && !replyRequested.current && !streamActive.current) {
           replyRequested.current = true;
@@ -117,6 +122,20 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
     };
   }, [runId, streamReply]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    void api.streamRunEvents(
+      runId,
+      (operation) => setOperations((current) => upsertOperation(current, operation)),
+      (nextRun) => setRun(nextRun),
+      controller.signal,
+    ).catch((reason) => {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      // The persisted refresh loop remains the recovery path when SSE is unavailable.
+    });
+    return () => controller.abort();
+  }, [runId]);
+
   if (loadError) return <div className="error-banner">{loadError}</div>;
   if (!run) return <div className="run-loading"><span /><p>正在读取研究状态</p></div>;
   return (
@@ -127,14 +146,20 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
           <button type="button" onClick={() => downloadMarkdown(run.id)}><Download size={16} />Markdown</button>
         </div>
       ) : null}
-      <div className="run-dialog-layout">
+      <div className={`run-dialog-layout${run.status === "completed" ? " run-dialog-completed" : ""}`}>
         <ResearchConversation
           messages={messages}
+          operations={operations}
           pending={conversationPending}
           canRevise={run.status === "completed" && Boolean(report)}
           reportVersion={reportVersion}
           error={conversationError}
           onSend={sendMessage}
+          onRetry={
+            ["failed", "cancelled"].includes(run.status)
+              ? retryResearch
+              : undefined
+          }
         />
         <RunWorkspaceView run={run} report={report} />
       </div>
@@ -153,6 +178,8 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
       const conversation = await api.getRunConversation(runId);
       setMessages(conversation.messages);
       setReportVersion(response.report_version);
+      const nextOperations = await loadRunOperations(runId);
+      if (nextOperations) setOperations(nextOperations);
       if (response.report_updated) {
         const rawReport = await api.getReport(runId);
         setReport(mapReport(rawReport as Parameters<typeof mapReport>[0]));
@@ -163,6 +190,39 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
     } finally {
       setConversationPending(false);
     }
+  }
+
+  async function retryResearch() {
+    setConversationPending(true);
+    setConversationError(null);
+    try {
+      const nextRun = await api.retryRun(runId);
+      setRun(nextRun);
+      const nextOperations = await loadRunOperations(runId);
+      if (nextOperations) setOperations(nextOperations);
+    } catch (reason) {
+      setConversationError(reason instanceof Error ? reason.message : "研究重试失败");
+    } finally {
+      setConversationPending(false);
+    }
+  }
+}
+
+function upsertOperation(current: RunOperation[], next: RunOperation): RunOperation[] {
+  const index = current.findIndex((operation) => operation.id === next.id);
+  if (index < 0) return [...current, next].sort((left, right) => left.sequence - right.sequence);
+  const updated = [...current];
+  updated[index] = next;
+  return updated;
+}
+
+async function loadRunOperations(runId: string): Promise<RunOperation[] | null> {
+  try {
+    return (await api.getRunOperations(runId)).operations;
+  } catch {
+    // Operations are an enhancement. Core run, conversation, and report data remain usable
+    // during a rolling frontend/API update or a temporary operations endpoint failure.
+    return null;
   }
 }
 

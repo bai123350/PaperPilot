@@ -66,4 +66,35 @@ describe("PaperPilotApi", () => {
     expect(onDelta.mock.calls.map(([value]) => value)).toEqual(["第一段", "第二段"]);
     expect(result.message.content).toBe("第一段第二段");
   });
+
+  it("delivers persisted run operation updates and the terminal run state", async () => {
+    localStorage.setItem("paperpilot_access_token", "token-1");
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          'id: operation-1\r\nevent: operation\r\ndata: {"id":"operation-1","run_id":"run-1","sequence":1,"task_kind":"research_run","operation_kind":"search_source","stage":"searching","title":"检索文献来源","summary":"正在检索一个文献来源。","status":"running","metrics":{},"conversation_message_id":null,"started_at":"2026-07-23T00:00:00Z","completed_at":null}\r\n\r\n',
+        ));
+        controller.enqueue(encoder.encode(
+          'event: done\r\ndata: {"id":"run-1","project_id":"project-1","status":"completed","stage":"auditing","error":null,"created_at":"2026-07-23T00:00:00Z","updated_at":"2026-07-23T00:01:00Z","completed_at":"2026-07-23T00:01:00Z","report_version":1}\r\n\r\n',
+        ));
+        controller.close();
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(body, { status: 200 }));
+    const onOperation = vi.fn();
+    const onDone = vi.fn();
+    const api = new PaperPilotApi("http://api.test");
+
+    await api.streamRunEvents("run-1", onOperation, onDone);
+
+    expect(onOperation).toHaveBeenCalledWith(expect.objectContaining({
+      id: "operation-1",
+      status: "running",
+    }));
+    expect(onDone).toHaveBeenCalledWith(expect.objectContaining({
+      id: "run-1",
+      status: "completed",
+    }));
+  });
 });

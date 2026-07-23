@@ -16,6 +16,7 @@ from paperpilot.domain.models import (
     RunStage,
     TimelineItem,
 )
+from paperpilot.domain.operations import OperationKind, OperationTaskKind, OperationUpdate
 from paperpilot.services.deduplication import deduplicate_papers
 
 
@@ -29,6 +30,25 @@ class LiteratureConnector(Protocol):
 
 
 StageCallback = Callable[[RunStage], None]
+
+
+class OperationSink(Protocol):
+    def start(self, update: OperationUpdate) -> str: ...
+
+    def complete(self, operation_id: str, metrics: dict[str, int] | None = None) -> None: ...
+
+    def fail(self, operation_id: str, error_category: str) -> None: ...
+
+
+class NullOperationSink:
+    def start(self, update: OperationUpdate) -> str:
+        return ""
+
+    def complete(self, operation_id: str, metrics: dict[str, int] | None = None) -> None:
+        return None
+
+    def fail(self, operation_id: str, error_category: str) -> None:
+        return None
 
 
 class ReportSynthesizer(Protocol):
@@ -49,15 +69,40 @@ class ResearchPipeline:
         self.connectors = connectors
         self.synthesizer = synthesizer
 
-    async def run(self, brief: ResearchBrief, on_stage: StageCallback) -> Report:
+    async def run(
+        self,
+        brief: ResearchBrief,
+        on_stage: StageCallback,
+        on_operation: OperationSink | None = None,
+    ) -> Report:
+        operations = on_operation or NullOperationSink()
         papers: list[Paper] = []
         evidence: list[EvidenceRecord] = []
 
         on_stage(RunStage.PLANNING)
+        operation_id = operations.start(
+            OperationUpdate(
+                task_kind=OperationTaskKind.RESEARCH_RUN,
+                operation_kind=OperationKind.STRUCTURE_QUESTION,
+                stage=RunStage.PLANNING,
+            )
+        )
+        operations.complete(operation_id)
+
         on_stage(RunStage.SEARCHING)
         for connector in self.connectors:
+            operation_id = operations.start(
+                OperationUpdate(
+                    task_kind=OperationTaskKind.RESEARCH_RUN,
+                    operation_kind=OperationKind.SEARCH_SOURCE,
+                    stage=RunStage.SEARCHING,
+                    metrics={"source_count": 1},
+                )
+            )
+            found: list[Paper] = []
             try:
-                papers.extend(await connector.search(brief))
+                found = await connector.search(brief)
+                papers.extend(found)
             except httpx.HTTPError as exc:
                 logger.warning(
                     "Literature connector unavailable",
@@ -66,15 +111,50 @@ class ResearchPipeline:
                         "error_type": type(exc).__name__,
                     },
                 )
+            operations.complete(operation_id, {"candidate_count": len(found)})
 
         on_stage(RunStage.DEDUPLICATING)
+        operation_id = operations.start(
+            OperationUpdate(
+                task_kind=OperationTaskKind.RESEARCH_RUN,
+                operation_kind=OperationKind.DEDUPLICATE,
+                stage=RunStage.DEDUPLICATING,
+                metrics={"candidate_count": len(papers)},
+            )
+        )
         papers = deduplicate_papers(papers)
+        operations.complete(operation_id, {"retained_count": len(papers)})
 
         on_stage(RunStage.SCREENING)
+        operation_id = operations.start(
+            OperationUpdate(
+                task_kind=OperationTaskKind.RESEARCH_RUN,
+                operation_kind=OperationKind.SCREEN,
+                stage=RunStage.SCREENING,
+                metrics={"candidate_count": len(papers)},
+            )
+        )
         papers = [paper for paper in papers if paper.abstract.strip()][:100]
+        operations.complete(operation_id, {"retained_count": len(papers)})
 
         on_stage(RunStage.PARSING)
+        operation_id = operations.start(
+            OperationUpdate(
+                task_kind=OperationTaskKind.RESEARCH_RUN,
+                operation_kind=OperationKind.PARSE,
+                stage=RunStage.PARSING,
+            )
+        )
+        operations.complete(operation_id, {"parsed_count": len(papers)})
+
         on_stage(RunStage.EXTRACTING)
+        operation_id = operations.start(
+            OperationUpdate(
+                task_kind=OperationTaskKind.RESEARCH_RUN,
+                operation_kind=OperationKind.CREATE_EVIDENCE,
+                stage=RunStage.EXTRACTING,
+            )
+        )
         for paper in papers:
             evidence.append(
                 EvidenceRecord(
@@ -89,17 +169,38 @@ class ResearchPipeline:
             )
 
         if not evidence:
+            operations.fail(operation_id, "no_evidence")
             raise ValueError("No evidence-bearing papers were found for this research brief")
+        operations.complete(operation_id, {"evidence_count": len(evidence)})
 
         on_stage(RunStage.SYNTHESIZING)
+        synthesis_operation_id = operations.start(
+            OperationUpdate(
+                task_kind=OperationTaskKind.RESEARCH_RUN,
+                operation_kind=OperationKind.SYNTHESIZE,
+                stage=RunStage.SYNTHESIZING,
+            )
+        )
         if self.synthesizer:
-            synthesis = await self.synthesizer.synthesize(brief, papers, evidence)
+            try:
+                synthesis = await self.synthesizer.synthesize(brief, papers, evidence)
+            except Exception:
+                operations.fail(synthesis_operation_id, "provider_unavailable")
+                raise
             claims = [Claim.model_validate(item) for item in synthesis["claims"]]
             summary = synthesis["summary"]
             themes = synthesis["themes"]
             controversies = synthesis["controversies"]
             gaps = synthesis["gaps"]
+            operations.complete(synthesis_operation_id)
             on_stage(RunStage.RECOMMENDING)
+            recommendation_operation_id = operations.start(
+                OperationUpdate(
+                    task_kind=OperationTaskKind.RESEARCH_RUN,
+                    operation_kind=OperationKind.RECOMMEND,
+                    stage=RunStage.RECOMMENDING,
+                )
+            )
             recommendations = [
                 Recommendation.model_validate(item) for item in synthesis["recommendations"]
             ]
@@ -121,10 +222,31 @@ class ResearchPipeline:
             themes = ["临床效能", "外部验证", "方法标准化"]
             controversies = ["研究人群、终点定义和分析流程存在异质性。"]
             gaps = ["缺少独立外部验证。", "缺少统一、可复现的检测与分析协议。"]
+            operations.complete(synthesis_operation_id)
             on_stage(RunStage.RECOMMENDING)
+            recommendation_operation_id = operations.start(
+                OperationUpdate(
+                    task_kind=OperationTaskKind.RESEARCH_RUN,
+                    operation_kind=OperationKind.RECOMMEND,
+                    stage=RunStage.RECOMMENDING,
+                )
+            )
             recommendations = self._recommendations(evidence)
+        operations.complete(
+            recommendation_operation_id,
+            {"recommendation_count": len(recommendations)},
+        )
 
         on_stage(RunStage.AUDITING)
+        audit_operation_id = operations.start(
+            OperationUpdate(
+                task_kind=OperationTaskKind.RESEARCH_RUN,
+                operation_kind=OperationKind.CITATION_AUDIT,
+                stage=RunStage.AUDITING,
+            )
+        )
+        citation_count = sum(len(item.evidence_ids) for item in [*claims, *recommendations])
+        operations.complete(audit_operation_id, {"citation_count": citation_count})
         return Report(
             title=brief.question.rstrip("?？"),
             summary=summary,

@@ -21,8 +21,14 @@ from paperpilot.database import (
     UserEntity,
 )
 from paperpilot.domain.models import Report, RunStatus
+from paperpilot.domain.operations import (
+    OperationKind,
+    OperationTaskKind,
+    OperationUpdate,
+)
 from paperpilot.models.deepseek import DeepSeekModel, ModelProviderError, ModelResponseError
 from paperpilot.services.llm_synthesis import SynthesisPayload
+from paperpilot.services.operation_recorder import OperationRecorder
 
 
 router = APIRouter(prefix="/v1/runs/{run_id}/conversation", tags=["run-conversation"])
@@ -151,6 +157,16 @@ async def send_message(
     )
     session.add(user_message)
     session.commit()
+    session.refresh(user_message)
+    task_kind = (
+        OperationTaskKind.REPORT_REVISION
+        if payload.action == "revise_report"
+        else OperationTaskKind.DISCUSSION
+    )
+    operations = OperationRecorder(request.app.state.database).bind(
+        run_id,
+        user_message.id,
+    )
 
     recent = list(
         session.scalars(
@@ -163,6 +179,24 @@ async def send_message(
     evidence = list(
         session.scalars(select(EvidenceEntity).where(EvidenceEntity.run_id == run_id))
     )
+    lookup_id = operations.start(
+        OperationUpdate(
+            task_kind=task_kind,
+            operation_kind=OperationKind.LOOKUP_EVIDENCE,
+        )
+    )
+    operations.complete(lookup_id, {"evidence_count": len(evidence)})
+    response_kind = (
+        OperationKind.REVISE_REPORT
+        if payload.action == "revise_report"
+        else OperationKind.GROUNDED_RESPONSE
+    )
+    response_operation_id = operations.start(
+        OperationUpdate(
+            task_kind=task_kind,
+            operation_kind=response_kind,
+        )
+    )
 
     try:
         if request.app.state.settings.demo_mode:
@@ -172,10 +206,30 @@ async def send_message(
                 run, payload, recent, evidence, request.app.state.settings
             )
     except ModelProviderError as exc:
+        operations.fail(
+            response_operation_id,
+            "invalid_model_response"
+            if isinstance(exc, ModelResponseError)
+            else "provider_unavailable",
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="研究对话暂时不可用，请稍后重试",
         ) from exc
+    operations.complete(response_operation_id)
+
+    validation_kind = (
+        OperationKind.REVISION_VALIDATION
+        if payload.action == "revise_report"
+        else OperationKind.CITATION_AUDIT
+    )
+    validation_id = operations.start(
+        OperationUpdate(
+            task_kind=task_kind,
+            operation_kind=validation_kind,
+        )
+    )
+    operations.complete(validation_id, {"citation_count": len(reply.evidence_ids)})
 
     if report_updated:
         session.add(
@@ -189,6 +243,17 @@ async def send_message(
         run.report = report_updated
         run.report_version += 1
 
+    save_kind = (
+        OperationKind.SAVE_REVISION
+        if report_updated
+        else OperationKind.SAVE_RESPONSE
+    )
+    save_operation_id = operations.start(
+        OperationUpdate(
+            task_kind=task_kind,
+            operation_kind=save_kind,
+        )
+    )
     assistant_message = ConversationMessageEntity(
         run_id=run_id,
         role="assistant",
@@ -199,6 +264,8 @@ async def send_message(
     session.add(assistant_message)
     session.commit()
     session.refresh(assistant_message)
+    save_metrics = {"report_version": run.report_version} if report_updated else None
+    operations.complete(save_operation_id, save_metrics)
     return SendMessageResponse(
         message=_message_payload(assistant_message),
         report_updated=bool(report_updated),
@@ -217,17 +284,18 @@ async def stream_message(
     run = owned_run(session, user.id, run_id)
     content = payload.content.strip()
     if payload.append_user:
-        session.add(
-            ConversationMessageEntity(
-                run_id=run_id,
-                role="user",
-                content=content,
-                evidence_ids=[],
-                report_version=run.report_version if run.report else None,
-            )
+        user_message = ConversationMessageEntity(
+            run_id=run_id,
+            role="user",
+            content=content,
+            evidence_ids=[],
+            report_version=run.report_version if run.report else None,
         )
+        session.add(user_message)
         run.project.updated_at = datetime.now(timezone.utc)
         session.commit()
+        session.refresh(user_message)
+        conversation_message_id = user_message.id
     else:
         latest = session.scalar(
             select(ConversationMessageEntity)
@@ -237,9 +305,15 @@ async def stream_message(
         )
         if not latest or latest.role != "user" or latest.content != content:
             raise HTTPException(status_code=409, detail="没有可继续回复的用户消息")
+        conversation_message_id = latest.id
 
     async def generate():
         model: DeepSeekModel | None = None
+        operations = OperationRecorder(request.app.state.database).bind(
+            run_id,
+            conversation_message_id,
+        )
+        active_operation_id: str | None = None
         try:
             with request.app.state.database.session() as stream_session:
                 current_run = owned_run(stream_session, user.id, run_id)
@@ -254,6 +328,19 @@ async def stream_message(
                 evidence = list(
                     stream_session.scalars(
                         select(EvidenceEntity).where(EvidenceEntity.run_id == run_id)
+                    )
+                )
+                lookup_id = operations.start(
+                    OperationUpdate(
+                        task_kind=OperationTaskKind.DISCUSSION,
+                        operation_kind=OperationKind.LOOKUP_EVIDENCE,
+                    )
+                )
+                operations.complete(lookup_id, {"evidence_count": len(evidence)})
+                active_operation_id = operations.start(
+                    OperationUpdate(
+                        task_kind=OperationTaskKind.DISCUSSION,
+                        operation_kind=OperationKind.GROUNDED_RESPONSE,
                     )
                 )
                 if request.app.state.settings.demo_mode:
@@ -321,6 +408,21 @@ async def stream_message(
                 reply_content = "".join(parts).strip()
                 if not reply_content:
                     raise ModelResponseError("Model returned an empty reply")
+                operations.complete(active_operation_id)
+                active_operation_id = None
+                audit_id = operations.start(
+                    OperationUpdate(
+                        task_kind=OperationTaskKind.DISCUSSION,
+                        operation_kind=OperationKind.CITATION_AUDIT,
+                    )
+                )
+                operations.complete(audit_id, {"citation_count": 0})
+                save_operation_id = operations.start(
+                    OperationUpdate(
+                        task_kind=OperationTaskKind.DISCUSSION,
+                        operation_kind=OperationKind.SAVE_RESPONSE,
+                    )
+                )
                 assistant_message = ConversationMessageEntity(
                     run_id=run_id,
                     role="assistant",
@@ -333,6 +435,7 @@ async def stream_message(
                 stream_session.flush()
                 message = _message_payload(assistant_message).model_dump(mode="json")
                 stream_session.commit()
+                operations.complete(save_operation_id)
                 yield {
                     "event": "complete",
                     "data": json.dumps(
@@ -340,7 +443,14 @@ async def stream_message(
                         ensure_ascii=False,
                     ),
                 }
-        except ModelProviderError:
+        except ModelProviderError as exc:
+            if active_operation_id is not None:
+                operations.fail(
+                    active_operation_id,
+                    "invalid_model_response"
+                    if isinstance(exc, ModelResponseError)
+                    else "provider_unavailable",
+                )
             yield {
                 "event": "error",
                 "data": json.dumps({"detail": "研究对话暂时不可用，请稍后重试"}, ensure_ascii=False),
