@@ -5,7 +5,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from paperpilot.api.routes import auth, projects, research_assistant, run_conversation, runs, uploads
+from paperpilot.api.routes import (
+    auth,
+    desktop_inference,
+    projects,
+    research_assistant,
+    run_conversation,
+    runs,
+    uploads,
+)
 from paperpilot.auth import AuthService
 from paperpilot.config import Settings
 from paperpilot.database import Database
@@ -42,6 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.object_store = create_object_store(active_settings)
     app.state.upload_tickets = UploadTicketService(active_settings.auth_secret)
     app.state.run_service = RunService(app.state.database, active_settings)
+    app.state.desktop_inference_cache = {}
     app.state.dispatch_run = lambda run_id: _dispatch_with_celery(run_id, active_settings)
 
     @app.get("/health")
@@ -53,6 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         }
 
     app.include_router(auth.router)
+    app.include_router(desktop_inference.router)
     app.include_router(projects.router)
     app.include_router(research_assistant.router)
     app.include_router(run_conversation.router)

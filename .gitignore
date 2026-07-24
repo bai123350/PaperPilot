@@ -16,6 +16,8 @@ coverage/
 playwright-report/
 test-results/
 dist/
+target/
+*.tsbuildinfo
 uploads/
 .DS_Store
 Thumbs.db

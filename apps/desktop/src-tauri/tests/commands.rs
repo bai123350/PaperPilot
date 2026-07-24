@@ -1,0 +1,39 @@
+use paperpilot_desktop::{
+    commands::DesktopService,
+    contracts::{ExportFormat, ResearchBrief, RunStatus},
+};
+
+#[test]
+fn desktop_service_exposes_the_local_project_run_report_and_delete_flow() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = DesktopService::open_for_test(directory.path(), [8_u8; 32]).unwrap();
+    let project = service.create_project("本地项目", "不进入云端").unwrap();
+    assert_eq!(service.list_projects().unwrap(), vec![project.clone()]);
+
+    let run = service
+        .start_run(
+            &project.id,
+            ResearchBrief {
+                question: "验证本地桌面研究流程".into(),
+                population: None,
+                intervention: None,
+                comparison: None,
+                outcomes: vec![],
+                keywords: vec![],
+                date_from: None,
+                date_to: None,
+                study_types: vec![],
+            },
+        )
+        .unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+    assert_eq!(service.get_run_snapshot(&run.id).unwrap().operations.len(), 9);
+    assert_eq!(service.get_report(&run.id, None).unwrap().recommendations.len(), 3);
+
+    let export = service.export_report(&run.id, ExportFormat::Markdown).unwrap();
+    assert!(export.content.contains("## 三个下一步方案"));
+    assert!(export.content.contains("仅供科研用途"));
+
+    service.delete_project(&project.id).unwrap();
+    assert!(service.list_projects().unwrap().is_empty());
+}
