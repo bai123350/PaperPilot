@@ -64,7 +64,7 @@ impl DesktopService {
         F: FnMut(RunEvent),
     {
         let run = self.queue_run(project_id, brief)?;
-        self.execute_run_with_observer(&run.id, observer)
+        self.execute_run_with_events(&run.id, observer)
     }
 
     pub fn queue_run(
@@ -75,6 +75,17 @@ impl DesktopService {
         Ok(self.engine.create_run(project_id, brief)?)
     }
 
+    pub fn execute_run_with_events<F>(
+        &self,
+        run_id: &str,
+        on_event: F,
+    ) -> Result<ResearchRun, CommandError>
+    where
+        F: FnMut(crate::contracts::RunEvent),
+    {
+        Ok(self.engine.execute_demo_run_with_events(run_id, on_event)?)
+    }
+
     pub fn execute_run_with_observer<F>(
         &self,
         run_id: &str,
@@ -83,9 +94,11 @@ impl DesktopService {
     where
         F: FnMut(RunEvent),
     {
-        Ok(self
-            .engine
-            .execute_demo_run_with_observer(run_id, observer)?)
+        self.execute_run_with_events(run_id, observer)
+    }
+
+    pub fn fail_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
+        Ok(self.engine.fail_run(run_id)?)
     }
 
     pub fn cancel_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
@@ -104,9 +117,7 @@ impl DesktopService {
     where
         F: FnMut(RunEvent),
     {
-        Ok(self
-            .engine
-            .execute_demo_run_with_observer(run_id, observer)?)
+        self.execute_run_with_events(run_id, observer)
     }
 
     pub fn wait_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {

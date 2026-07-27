@@ -18,6 +18,8 @@ test-results/
 dist/
 target/
 *.tsbuildinfo
+apps/desktop/src-tauri/bindings/
+apps/desktop/src-tauri/gen/
 uploads/
 .DS_Store
 Thumbs.db

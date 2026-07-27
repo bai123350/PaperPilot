@@ -13,6 +13,7 @@ path = "src/lib.rs"
 aes-gcm = "0.10"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+pdfium-render = { version = "0.9.3", default-features = false, features = ["pdfium_latest", "thread_safe"] }
 rand = "0.9"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -20,12 +21,16 @@ serde_json = "1"
 tauri = { version = "2.11.5", features = [] }
 thiserror = "2"
 ts-rs = { version = "11", features = ["chrono-impl", "uuid-impl"] }
+ureq = { version = "3.3", features = ["json"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [target.'cfg(windows)'.dependencies]
+keyring-core = "1.0"
 windows-dpapi = "0.2"
+windows-native-keyring-store = { version = "1.1", default-features = false }
 
 [dev-dependencies]
+pdfium-bundled = "0.1.1"
 tempfile = "3"
 
 [build-dependencies]

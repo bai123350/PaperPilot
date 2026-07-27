@@ -87,6 +87,9 @@ impl ResearchEngine {
         if run.status == RunStatus::Cancelled {
             return Ok(run);
         }
+        if !matches!(run.status, RunStatus::Running | RunStatus::Retrying) {
+            return Err(PipelineError::InvalidState);
+        }
         Ok(self.store.update_run(
             run_id,
             RunStatus::Waiting,
@@ -101,13 +104,35 @@ impl ResearchEngine {
     }
 
     pub fn execute_demo_run(&self, run_id: &str) -> Result<ResearchRun, PipelineError> {
-        self.execute_demo_run_with_observer(run_id, |_| {})
+        self.execute_demo_run_with_events(run_id, |_| {})
     }
 
     pub fn execute_demo_run_with_observer<F>(
         &self,
         run_id: &str,
-        mut observer: F,
+        observer: F,
+    ) -> Result<ResearchRun, PipelineError>
+    where
+        F: FnMut(RunEvent),
+    {
+        self.execute_demo_run_with_events(run_id, observer)
+    }
+
+    pub fn fail_run(&self, run_id: &str) -> Result<ResearchRun, PipelineError> {
+        let run = self.store.get_run(run_id)?;
+        Ok(self.store.update_run(
+            run_id,
+            RunStatus::Failed,
+            run.stage.as_deref(),
+            run.progress,
+            run.report_version,
+        )?)
+    }
+
+    pub fn execute_demo_run_with_events<F>(
+        &self,
+        run_id: &str,
+        mut on_event: F,
     ) -> Result<ResearchRun, PipelineError>
     where
         F: FnMut(RunEvent),
@@ -119,12 +144,29 @@ impl ResearchEngine {
         ) {
             return Err(PipelineError::InvalidState);
         }
-        self.store
-            .update_run(run_id, RunStatus::Running, Some(STAGES[0].0), 0, 0)?;
 
-        for (index, (kind, title, summary)) in STAGES.iter().enumerate() {
+        let operations = self.store.list_operations(run_id)?;
+        let completed_stages = operations
+            .iter()
+            .enumerate()
+            .take_while(|(index, operation)| {
+                operation.sequence == *index as u64 + 1 && operation.status == "completed"
+            })
+            .count()
+            .min(STAGES.len());
+        let resumed_progress = ((completed_stages * 100) / STAGES.len()) as u8;
+        let resumed_stage = STAGES[completed_stages.min(STAGES.len() - 1)].0;
+        self.store.update_run(
+            run_id,
+            RunStatus::Running,
+            Some(resumed_stage),
+            resumed_progress,
+            run.report_version,
+        )?;
+
+        for (index, (kind, title, summary)) in STAGES.iter().enumerate().skip(completed_stages) {
             let current = self.store.get_run(run_id)?;
-            if current.status == RunStatus::Cancelled {
+            if current.status != RunStatus::Running {
                 return Ok(current);
             }
             let sequence = index as u64 + 1;
@@ -141,23 +183,23 @@ impl ResearchEngine {
                 created_at: Utc::now(),
             };
             self.store.save_operation(&operation)?;
-            let persisted_run =
+            let updated =
                 self.store
                     .update_run(run_id, RunStatus::Running, Some(kind), progress, 0)?;
-            observer(RunEvent {
+            on_event(RunEvent {
                 contract_version: CONTRACT_VERSION.into(),
                 run_id: run_id.into(),
                 sequence,
-                status: persisted_run.status,
-                stage: persisted_run.stage,
-                progress: persisted_run.progress,
+                status: updated.status,
+                stage: updated.stage,
+                progress: updated.progress,
                 operation: Some(operation),
                 safe_summary: (*summary).into(),
             });
         }
 
         let current = self.store.get_run(run_id)?;
-        if current.status == RunStatus::Cancelled {
+        if current.status != RunStatus::Running {
             return Ok(current);
         }
         let evidence = demo_evidence(run_id);
@@ -167,10 +209,11 @@ impl ResearchEngine {
         let report = demo_report(run_id, 1, evidence);
         validate_report(&report).map_err(PipelineError::Validation)?;
         self.store.save_report(&report)?;
+        let completion_sequence = self.store.next_timeline_sequence(run_id)?;
         self.store.save_message(&ConversationMessage {
             id: Uuid::new_v4().to_string(),
             run_id: run_id.into(),
-            sequence: 1,
+            sequence: completion_sequence,
             role: "assistant".into(),
             content: "完整报告已生成在右侧，包含 3 个可检验的下一步方案。".into(),
             evidence_ids: vec![],
@@ -180,7 +223,7 @@ impl ResearchEngine {
         let completed =
             self.store
                 .update_run(run_id, RunStatus::Completed, Some("citation_audit"), 100, 1)?;
-        observer(RunEvent {
+        on_event(RunEvent {
             contract_version: CONTRACT_VERSION.into(),
             run_id: run_id.into(),
             sequence: STAGES.len() as u64 + 1,
@@ -218,7 +261,7 @@ impl ResearchEngine {
         if run.status != RunStatus::Completed {
             return Err(PipelineError::InvalidState);
         }
-        let user_sequence = self.store.next_message_sequence(run_id)?;
+        let user_sequence = self.store.next_timeline_sequence(run_id)?;
         self.store.save_message(&ConversationMessage {
             id: Uuid::new_v4().to_string(),
             run_id: run_id.into(),

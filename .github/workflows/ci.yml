@@ -26,3 +26,20 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: "npm" }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: npm ci
+      - run: npm run contracts:desktop
+      - run: git diff --exit-code -- apps/desktop/src/generated/contracts.ts
+      - run: cargo fmt --all -- --check
+      - run: cargo test --workspace --all-targets --locked
+      - run: npm test --workspace @paperpilot/desktop
+      - run: npm run build --workspace @paperpilot/desktop

@@ -40,8 +40,7 @@ pub fn load_or_create_master_key(data_dir: &Path) -> Result<[u8; KEY_LENGTH], Ke
 fn protect_key(path: &Path, key: &[u8; KEY_LENGTH]) -> Result<(), KeyError> {
     use windows_dpapi::{Scope, encrypt_data};
 
-    let protected =
-        encrypt_data(key, Scope::User, Some(ENTROPY)).map_err(|_| KeyError::Protect)?;
+    let protected = encrypt_data(key, Scope::User, Some(ENTROPY)).map_err(|_| KeyError::Protect)?;
     let temporary = temporary_path(path);
     fs::write(&temporary, protected)?;
     fs::rename(temporary, path)?;
@@ -60,9 +59,7 @@ fn unprotect_key(path: &Path) -> Result<[u8; KEY_LENGTH], KeyError> {
     let protected = fs::read(path)?;
     let decrypted =
         decrypt_data(&protected, Scope::User, Some(ENTROPY)).map_err(|_| KeyError::Unprotect)?;
-    decrypted
-        .try_into()
-        .map_err(|_| KeyError::InvalidLength)
+    decrypted.try_into().map_err(|_| KeyError::InvalidLength)
 }
 
 #[cfg(not(windows))]

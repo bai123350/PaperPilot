@@ -158,10 +158,10 @@ impl LocalStore {
         rows.map(|row| {
             let (id, name, description, created_at, updated_at) = row?;
             Ok(Project {
-                name: decode(self.crypto.decrypt_with_aad(
-                    &name,
-                    format!("project:{id}:name").as_bytes(),
-                )?)?,
+                name: decode(
+                    self.crypto
+                        .decrypt_with_aad(&name, format!("project:{id}:name").as_bytes())?,
+                )?,
                 description: decode(self.crypto.decrypt_with_aad(
                     &description,
                     format!("project:{id}:description").as_bytes(),
@@ -188,7 +188,13 @@ impl LocalStore {
         self.connection()?.execute(
             "INSERT INTO attachments (id, project_id, filename_encrypted, object_path, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, project_id, filename, object_path, Utc::now().to_rfc3339()],
+            params![
+                id,
+                project_id,
+                filename,
+                object_path,
+                Utc::now().to_rfc3339()
+            ],
         )?;
         Ok(())
     }
@@ -200,11 +206,11 @@ impl LocalStore {
     }
 
     pub fn attachment_count(&self) -> Result<u64, StorageError> {
-        let count = self.connection()?.query_row(
-            "SELECT COUNT(*) FROM attachments",
-            [],
-            |row| row.get::<_, u64>(0),
-        )?;
+        let count =
+            self.connection()?
+                .query_row("SELECT COUNT(*) FROM attachments", [], |row| {
+                    row.get::<_, u64>(0)
+                })?;
         Ok(count)
     }
 
@@ -272,10 +278,7 @@ impl LocalStore {
                         report_version,
                         created_at: parse_timestamp(&created_at)?,
                         updated_at: parse_timestamp(&updated_at)?,
-                        completed_at: completed_at
-                            .as_deref()
-                            .map(parse_timestamp)
-                            .transpose()?,
+                        completed_at: completed_at.as_deref().map(parse_timestamp).transpose()?,
                     })
                 },
             )
@@ -415,19 +418,17 @@ impl LocalStore {
         Ok(())
     }
 
-    pub fn get_report(
-        &self,
-        run_id: &str,
-        version: Option<u32>,
-    ) -> Result<Report, StorageError> {
+    pub fn get_report(&self, run_id: &str, version: Option<u32>) -> Result<Report, StorageError> {
         let version = match version {
             Some(version) => version,
-            None => self.connection()?.query_row(
-                "SELECT MAX(version) FROM reports WHERE run_id = ?1",
-                [run_id],
-                |row| row.get::<_, Option<u32>>(0),
-            )?
-            .ok_or(StorageError::NotFound)?,
+            None => self
+                .connection()?
+                .query_row(
+                    "SELECT MAX(version) FROM reports WHERE run_id = ?1",
+                    [run_id],
+                    |row| row.get::<_, Option<u32>>(0),
+                )?
+                .ok_or(StorageError::NotFound)?,
         };
         let encrypted = self
             .connection()?
@@ -455,9 +456,14 @@ impl LocalStore {
         })
     }
 
-    pub fn next_message_sequence(&self, run_id: &str) -> Result<u64, StorageError> {
+    pub fn next_timeline_sequence(&self, run_id: &str) -> Result<u64, StorageError> {
         let value = self.connection()?.query_row(
-            "SELECT COALESCE(MAX(sequence), 0) + 1 FROM messages WHERE run_id = ?1",
+            "SELECT COALESCE(MAX(sequence), 0) + 1
+             FROM (
+                 SELECT sequence FROM messages WHERE run_id = ?1
+                 UNION ALL
+                 SELECT sequence FROM operations WHERE run_id = ?1
+             )",
             [run_id],
             |row| row.get(0),
         )?;
@@ -487,10 +493,9 @@ impl LocalStore {
         associated_data: &str,
         value: &T,
     ) -> Result<Vec<u8>, StorageError> {
-        Ok(self.crypto.encrypt_with_aad(
-            &serde_json::to_vec(value)?,
-            associated_data.as_bytes(),
-        )?)
+        Ok(self
+            .crypto
+            .encrypt_with_aad(&serde_json::to_vec(value)?, associated_data.as_bytes())?)
     }
 
     fn decrypt_json<T: serde::de::DeserializeOwned>(

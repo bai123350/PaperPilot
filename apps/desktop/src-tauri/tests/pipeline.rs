@@ -47,6 +47,7 @@ fn demo_pipeline_persists_nine_stages_and_an_audited_report() {
             .iter()
             .all(|operation| operation.status == "completed")
     );
+    assert_eq!(snapshot.messages[0].sequence, 10);
 
     let report = engine.get_report(&queued.id, None).unwrap();
     validate_report(&report).unwrap();
@@ -150,6 +151,14 @@ fn conversation_only_versions_the_report_for_revision_intent() {
     assert_eq!(revision.action, MessageAction::ReviseReport);
     assert_eq!(revision.report_version, 2);
     assert!(revision.report_updated);
+    let snapshot = engine.get_run_snapshot(&run.id).unwrap();
+    let timeline_sequences = snapshot
+        .operations
+        .into_iter()
+        .map(|item| item.sequence)
+        .chain(snapshot.messages.into_iter().map(|item| item.sequence))
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(timeline_sequences.len(), 14);
     assert!(
         engine.get_report(&run.id, Some(1)).is_ok(),
         "old report versions remain available"
@@ -160,5 +169,38 @@ fn conversation_only_versions_the_report_for_revision_intent() {
             .unwrap()
             .summary
             .contains("8 周")
+    );
+}
+
+#[test]
+fn waiting_runs_resume_from_the_last_persisted_stage_without_duplicates() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LocalStore::open(&directory.path().join("paperpilot.db"), [5_u8; 32]).unwrap();
+    let project = store.create_project("resume", "").unwrap();
+    let engine = ResearchEngine::new(store);
+    let run = engine.create_run(&project.id, brief()).unwrap();
+
+    let interrupted = engine
+        .execute_demo_run_with_events(&run.id, |event| {
+            if event.sequence == 3 {
+                engine.wait_run(&run.id).unwrap();
+            }
+        })
+        .unwrap();
+    assert_eq!(interrupted.status, RunStatus::Waiting);
+    assert_eq!(
+        engine.get_run_snapshot(&run.id).unwrap().operations.len(),
+        3
+    );
+
+    let mut resumed_sequences = Vec::new();
+    let completed = engine
+        .execute_demo_run_with_events(&run.id, |event| resumed_sequences.push(event.sequence))
+        .unwrap();
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(resumed_sequences, (4..=10).collect::<Vec<_>>());
+    assert_eq!(
+        engine.get_run_snapshot(&run.id).unwrap().operations.len(),
+        9
     );
 }
