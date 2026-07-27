@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "contracts:generate": "cargo run --offline --manifest-path src-tauri/Cargo.toml --example export_contracts",
+    "contracts:check": "npm run contracts:generate && git diff --exit-code -- src/generated/contracts.ts",
     "test": "vitest run",
     "lint": "eslint .",
     "tauri": "tauri"

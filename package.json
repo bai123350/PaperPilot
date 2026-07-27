@@ -11,6 +11,8 @@
     "test": "npm run test --workspace @paperpilot/web",
     "test:desktop": "npm run test --workspace @paperpilot/desktop",
     "build:desktop": "npm run build --workspace @paperpilot/desktop",
+    "contracts:desktop": "npm run contracts:generate --workspace @paperpilot/desktop",
+    "check:desktop-contracts": "npm run contracts:check --workspace @paperpilot/desktop",
     "test:e2e": "npm run test:e2e --workspace @paperpilot/web"
   }
 }

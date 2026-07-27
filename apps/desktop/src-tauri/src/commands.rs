@@ -55,6 +55,29 @@ impl DesktopService {
         Ok(self.engine.execute_demo_run(&run.id)?)
     }
 
+    pub fn queue_run(
+        &self,
+        project_id: &str,
+        brief: ResearchBrief,
+    ) -> Result<ResearchRun, CommandError> {
+        Ok(self.engine.create_run(project_id, brief)?)
+    }
+
+    pub fn execute_run_with_events<F>(
+        &self,
+        run_id: &str,
+        on_event: F,
+    ) -> Result<ResearchRun, CommandError>
+    where
+        F: FnMut(crate::contracts::RunEvent),
+    {
+        Ok(self.engine.execute_demo_run_with_events(run_id, on_event)?)
+    }
+
+    pub fn fail_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
+        Ok(self.engine.fail_run(run_id)?)
+    }
+
     pub fn cancel_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
         Ok(self.engine.cancel_run(run_id)?)
     }
@@ -71,11 +94,7 @@ impl DesktopService {
         Ok(self.engine.get_run_snapshot(run_id)?)
     }
 
-    pub fn get_report(
-        &self,
-        run_id: &str,
-        version: Option<u32>,
-    ) -> Result<Report, CommandError> {
+    pub fn get_report(&self, run_id: &str, version: Option<u32>) -> Result<Report, CommandError> {
         Ok(self.engine.get_report(run_id, version)?)
     }
 

@@ -19,6 +19,37 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
     bridge.listProjects().then(setProjects).catch(showError);
   }, [bridge]);
 
+  useEffect(() => {
+    if (!selected) return;
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    bridge
+      .onRunEvent(async (event) => {
+        try {
+          const next = await bridge.getRunSnapshot(event.runId);
+          if (!active || next.run.projectId !== selected.id) return;
+          setSnapshot(next);
+          if (next.run.status === "completed") {
+            const completedReport = await bridge.getReport(event.runId);
+            if (active) setReport(completedReport);
+          }
+        } catch (reason) {
+          if (active) showError(reason);
+        }
+      })
+      .then((stopListening) => {
+        if (active) unlisten = stopListening;
+        else stopListening();
+      })
+      .catch((reason) => {
+        if (active) showError(reason);
+      });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [bridge, selected]);
+
   async function createProject() {
     const name = newName.trim();
     if (!name) return;

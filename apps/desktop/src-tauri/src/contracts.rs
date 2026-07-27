@@ -89,6 +89,7 @@ pub struct ResearchRun {
 pub struct ConversationMessage {
     pub id: String,
     pub run_id: String,
+    #[ts(type = "number")]
     pub sequence: u64,
     pub role: String,
     pub content: String,
@@ -103,6 +104,7 @@ pub struct ConversationMessage {
 pub struct RunOperation {
     pub id: String,
     pub run_id: String,
+    #[ts(type = "number")]
     pub sequence: u64,
     pub operation_kind: String,
     pub stage: String,
@@ -138,6 +140,7 @@ pub struct MessageResult {
 pub struct RunEvent {
     pub contract_version: String,
     pub run_id: String,
+    #[ts(type = "number")]
     pub sequence: u64,
     pub status: RunStatus,
     pub stage: Option<String>,
@@ -212,7 +215,10 @@ pub fn validate_report(report: &Report) -> Result<(), String> {
     if report.recommendations.len() != 3 {
         return Err("report must contain exactly three recommendations".into());
     }
-    if report.claims.iter().any(|claim| claim.evidence_ids.is_empty())
+    if report
+        .claims
+        .iter()
+        .any(|claim| claim.evidence_ids.is_empty())
         || report
             .recommendations
             .iter()

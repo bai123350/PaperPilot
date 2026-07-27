@@ -61,7 +61,9 @@ impl AttachmentStore {
             "{FILE_PREFIX}{}-{id}{FILE_SUFFIX}",
             created_at.timestamp()
         ));
-        let encrypted = self.crypto.encrypt_with_aad(contents, attachment_aad(project_id, &id).as_bytes())?;
+        let encrypted = self
+            .crypto
+            .encrypt_with_aad(contents, attachment_aad(project_id, &id).as_bytes())?;
         fs::write(&path, encrypted).map_err(storage_error)?;
 
         Ok(SavedAttachment {

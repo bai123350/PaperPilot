@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 import type {
   MessageResult,
@@ -6,6 +7,7 @@ import type {
   Report,
   ResearchBrief,
   ResearchRun,
+  RunEvent,
   RunSnapshot,
 } from "./generated/contracts";
 
@@ -17,6 +19,7 @@ export interface DesktopBridge {
   getReport(runId: string, version?: number): Promise<Report>;
   sendMessage(runId: string, content: string): Promise<MessageResult>;
   deleteProject(projectId: string): Promise<void>;
+  onRunEvent(listener: (event: RunEvent) => void): Promise<() => void>;
 }
 
 export const tauriBridge: DesktopBridge = {
@@ -27,4 +30,6 @@ export const tauriBridge: DesktopBridge = {
   getReport: (runId, version) => invoke("get_report", { runId, version }),
   sendMessage: (runId, content) => invoke("send_message", { runId, content }),
   deleteProject: (projectId) => invoke("delete_project", { projectId }),
+  onRunEvent: (listener) =>
+    listen<RunEvent>("paperpilot://run-event", (event) => listener(event.payload)),
 };

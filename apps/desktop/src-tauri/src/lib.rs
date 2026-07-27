@@ -2,8 +2,11 @@ pub mod attachments;
 pub mod commands;
 pub mod contracts;
 pub mod crypto;
+pub mod gateway;
 pub mod key_management;
+pub mod pdf_parser;
 pub mod pipeline;
+pub mod runtime;
 pub mod storage;
 mod tauri_api;
 
@@ -19,6 +22,27 @@ pub fn run() {
             let key = key_management::load_or_create_master_key(&data_dir)?;
             let service = commands::DesktopService::open(&data_dir, key)?;
             app.manage(service);
+            let runtime = runtime::DesktopRuntimeConfig::from_env()?;
+            #[cfg(windows)]
+            if !runtime.demo_mode {
+                use std::{sync::Arc, time::Duration};
+
+                let installation_id = runtime::load_or_create_installation_id(&data_dir)?;
+                let gateway = Arc::new(gateway::GatewayClient::new(
+                    runtime
+                        .gateway_url
+                        .expect("live desktop mode requires a gateway URL"),
+                    installation_id.clone(),
+                    gateway::UreqTransport::new(Duration::from_secs(30)),
+                    gateway::CredentialManagerTokenStore::new(installation_id),
+                    3,
+                ));
+                let authentication = gateway.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let _ = authentication.authenticate();
+                });
+                app.manage(gateway);
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
