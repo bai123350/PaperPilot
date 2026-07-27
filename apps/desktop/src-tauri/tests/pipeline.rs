@@ -41,15 +41,91 @@ fn demo_pipeline_persists_nine_stages_and_an_audited_report() {
             .collect::<Vec<_>>(),
         (1..=9).collect::<Vec<_>>()
     );
-    assert!(snapshot
-        .operations
-        .iter()
-        .all(|operation| operation.status == "completed"));
+    assert!(
+        snapshot
+            .operations
+            .iter()
+            .all(|operation| operation.status == "completed")
+    );
 
     let report = engine.get_report(&queued.id, None).unwrap();
     validate_report(&report).unwrap();
     assert_eq!(report.recommendations.len(), 3);
-    assert!(report.claims.iter().all(|claim| !claim.evidence_ids.is_empty()));
+    assert!(
+        report
+            .claims
+            .iter()
+            .all(|claim| !claim.evidence_ids.is_empty())
+    );
+}
+
+#[test]
+fn demo_pipeline_emits_ordered_safe_events_after_each_persisted_stage() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LocalStore::open(&directory.path().join("paperpilot.db"), [9_u8; 32]).unwrap();
+    let project = store.create_project("免疫耐药", "").unwrap();
+    let engine = ResearchEngine::new(store);
+    let queued = engine.create_run(&project.id, brief()).unwrap();
+    let mut events = Vec::new();
+
+    let completed = engine
+        .execute_demo_run_with_observer(&queued.id, |event| events.push(event))
+        .unwrap();
+
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(events.len(), 10);
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        (1..=10).collect::<Vec<_>>()
+    );
+    assert!(events[..9].iter().all(|event| {
+        event.status == RunStatus::Running
+            && event.operation.is_some()
+            && event.stage == event.operation.as_ref().map(|item| item.stage.clone())
+    }));
+    let final_event = events.last().unwrap();
+    assert_eq!(final_event.status, RunStatus::Completed);
+    assert_eq!(final_event.progress, 100);
+    assert!(final_event.operation.is_none());
+    assert!(
+        events
+            .iter()
+            .all(|event| !event.safe_summary.contains("比较 PD-1 耐药标志物"))
+    );
+}
+
+#[test]
+fn pipeline_stops_before_the_next_stage_when_cancelled() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LocalStore::open(&directory.path().join("paperpilot.db"), [10_u8; 32]).unwrap();
+    let project = store.create_project("免疫耐药", "").unwrap();
+    let engine = ResearchEngine::new(store);
+    let queued = engine.create_run(&project.id, brief()).unwrap();
+    let mut observed = 0;
+
+    let cancelled = engine
+        .execute_demo_run_with_observer(&queued.id, |_| {
+            observed += 1;
+            if observed == 1 {
+                engine.cancel_run(&queued.id).unwrap();
+            }
+        })
+        .unwrap();
+
+    assert_eq!(cancelled.status, RunStatus::Cancelled);
+    assert_eq!(observed, 1);
+    assert_eq!(
+        engine
+            .get_run_snapshot(&queued.id)
+            .unwrap()
+            .operations
+            .len(),
+        1
+    );
+    assert!(engine.get_report(&queued.id, None).is_err());
 }
 
 #[test]
@@ -74,12 +150,15 @@ fn conversation_only_versions_the_report_for_revision_intent() {
     assert_eq!(revision.action, MessageAction::ReviseReport);
     assert_eq!(revision.report_version, 2);
     assert!(revision.report_updated);
-    assert!(engine
-        .get_report(&run.id, Some(1))
-        .is_ok(), "old report versions remain available");
-    assert!(engine
-        .get_report(&run.id, Some(2))
-        .unwrap()
-        .summary
-        .contains("8 周"));
+    assert!(
+        engine.get_report(&run.id, Some(1)).is_ok(),
+        "old report versions remain available"
+    );
+    assert!(
+        engine
+            .get_report(&run.id, Some(2))
+            .unwrap()
+            .summary
+            .contains("8 周")
+    );
 }

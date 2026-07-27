@@ -1,8 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, BookOpenCheck, FolderPlus, ShieldCheck, Trash2 } from "lucide-react";
 
 import { tauriBridge, type DesktopBridge } from "./bridge";
-import type { Project, Report, RunSnapshot } from "./generated/contracts";
+import type {
+  ExportFormat,
+  Project,
+  Report,
+  ResearchBrief,
+  RunEvent,
+  RunSnapshot,
+} from "./generated/contracts";
 import { Workspace } from "./workspace";
 import "./App.css";
 
@@ -14,10 +21,29 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
+  const latestEventSequence = useRef<Record<string, number>>({});
 
   useEffect(() => {
     bridge.listProjects().then(setProjects).catch(showError);
   }, [bridge]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    bridge
+      .listenRunEvents((event) => {
+        void applyRunEvent(event);
+      })
+      .then((dispose) => {
+        if (disposed) dispose();
+        else unlisten = dispose;
+      })
+      .catch(showError);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [bridge, selected?.id]);
 
   async function createProject() {
     const name = newName.trim();
@@ -35,23 +61,45 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
     }
   }
 
-  async function startResearch(question: string) {
+  async function startResearch(brief: ResearchBrief) {
     if (!selected) return;
     setPending(true);
     setError(null);
     try {
-      const run = await bridge.startRun(selected.id, {
-        question,
-        population: null,
-        intervention: null,
-        comparison: null,
-        outcomes: [],
-        keywords: [],
-        dateFrom: null,
-        dateTo: null,
-        studyTypes: [],
-      });
+      const run = await bridge.startRun(selected.id, brief);
       await refreshRun(run.id);
+    } catch (reason) {
+      showError(reason);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function exportReport(format: ExportFormat) {
+    if (!snapshot || !report) return;
+    setPending(true);
+    setError(null);
+    try {
+      const exported = await bridge.exportReport(snapshot.run.id, format);
+      if (format === "print_html") {
+        const printWindow = window.open("", "_blank");
+        if (!printWindow) throw new Error("无法打开打印窗口，请允许 PaperPilot 打开新窗口。");
+        printWindow.opener = null;
+        printWindow.document.write(exported.content);
+        printWindow.document.close();
+        printWindow.focus();
+        printWindow.print();
+        return;
+      }
+
+      const url = URL.createObjectURL(
+        new Blob([exported.content], { type: "text/markdown;charset=utf-8" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = exported.suggestedFilename;
+      link.click();
+      URL.revokeObjectURL(url);
     } catch (reason) {
       showError(reason);
     } finally {
@@ -78,6 +126,28 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
     const next = await bridge.getRunSnapshot(runId);
     setSnapshot(next);
     if (next.run.status === "completed") setReport(await bridge.getReport(runId));
+  }
+
+  async function applyRunEvent(event: RunEvent) {
+    if (!selected) return;
+    const latest = latestEventSequence.current[event.runId] ?? 0;
+    if (event.sequence <= latest) return;
+    latestEventSequence.current[event.runId] = event.sequence;
+    try {
+      const next = await bridge.getRunSnapshot(event.runId);
+      if (
+        next.run.projectId !== selected.id
+        || latestEventSequence.current[event.runId] !== event.sequence
+      ) {
+        return;
+      }
+      setSnapshot(next);
+      if (event.status === "completed") {
+        setReport(await bridge.getReport(event.runId));
+      }
+    } catch (reason) {
+      showError(reason);
+    }
   }
 
   async function deleteProject(project: Project) {
@@ -121,6 +191,7 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
           pending={pending}
           onStart={startResearch}
           onSend={sendMessage}
+          onExport={exportReport}
         />
       </div>
     );

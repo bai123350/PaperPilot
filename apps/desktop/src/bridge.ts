@@ -1,11 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  ExportFormat,
+  ExportResult,
   MessageResult,
   Project,
   Report,
   ResearchBrief,
   ResearchRun,
+  RunEvent,
   RunSnapshot,
 } from "./generated/contracts";
 
@@ -15,8 +19,10 @@ export interface DesktopBridge {
   startRun(projectId: string, brief: ResearchBrief): Promise<ResearchRun>;
   getRunSnapshot(runId: string): Promise<RunSnapshot>;
   getReport(runId: string, version?: number): Promise<Report>;
+  exportReport(runId: string, format: ExportFormat): Promise<ExportResult>;
   sendMessage(runId: string, content: string): Promise<MessageResult>;
   deleteProject(projectId: string): Promise<void>;
+  listenRunEvents(handler: (event: RunEvent) => void): Promise<UnlistenFn>;
 }
 
 export const tauriBridge: DesktopBridge = {
@@ -25,6 +31,9 @@ export const tauriBridge: DesktopBridge = {
   startRun: (projectId, brief) => invoke("start_run", { projectId, brief }),
   getRunSnapshot: (runId) => invoke("get_run_snapshot", { runId }),
   getReport: (runId, version) => invoke("get_report", { runId, version }),
+  exportReport: (runId, format) => invoke("export_report", { runId, format }),
   sendMessage: (runId, content) => invoke("send_message", { runId, content }),
   deleteProject: (projectId) => invoke("delete_project", { projectId }),
+  listenRunEvents: (handler) =>
+    listen<RunEvent>("paperpilot://run-event", (event) => handler(event.payload)),
 };

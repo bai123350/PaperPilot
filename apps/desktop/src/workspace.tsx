@@ -3,8 +3,10 @@ import {
   Bot,
   CheckCircle2,
   Clock3,
+  Download,
   FileText,
   FlaskConical,
+  Printer,
   Send,
   UserRound,
   X,
@@ -13,7 +15,9 @@ import {
 import type {
   ConversationMessage,
   EvidenceRecord,
+  ExportFormat,
   Report,
+  ResearchBrief,
   ResearchRun,
   RunOperation,
 } from "./generated/contracts";
@@ -28,7 +32,8 @@ interface WorkspaceProps {
   reportUpdating?: boolean;
   pending?: boolean;
   onSend?: (content: string) => Promise<void> | void;
-  onStart?: (question: string) => Promise<void> | void;
+  onStart?: (brief: ResearchBrief) => Promise<void> | void;
+  onExport?: (format: ExportFormat) => Promise<void> | void;
 }
 
 type TimelineEntry =
@@ -45,9 +50,19 @@ export function Workspace({
   pending = false,
   onSend,
   onStart,
+  onExport,
 }: WorkspaceProps) {
   const [content, setContent] = useState("");
   const [evidence, setEvidence] = useState<EvidenceRecord | null>(null);
+  const [population, setPopulation] = useState("");
+  const [intervention, setIntervention] = useState("");
+  const [comparison, setComparison] = useState("");
+  const [outcomes, setOutcomes] = useState("");
+  const [keywords, setKeywords] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [studyTypes, setStudyTypes] = useState("");
+  const [briefError, setBriefError] = useState<string | null>(null);
   const timeline = useMemo<TimelineEntry[]>(
     () =>
       [
@@ -64,9 +79,36 @@ export function Workspace({
   async function submit() {
     const value = content.trim();
     if (!value || pending) return;
+    if (run) {
+      setContent("");
+      await onSend?.(value);
+      return;
+    }
+
+    const from = parseYear(dateFrom);
+    const to = parseYear(dateTo);
+    if (from === undefined || to === undefined) {
+      setBriefError("年份必须是 1900–2100 之间的四位数字。");
+      return;
+    }
+    if (from !== null && to !== null && from > to) {
+      setBriefError("起始年份不能晚于结束年份。");
+      return;
+    }
+
+    setBriefError(null);
     setContent("");
-    if (run) await onSend?.(value);
-    else await onStart?.(value);
+    await onStart?.({
+      question: value,
+      population: optionalText(population),
+      intervention: optionalText(intervention),
+      comparison: optionalText(comparison),
+      outcomes: splitValues(outcomes),
+      keywords: splitValues(keywords),
+      dateFrom: from,
+      dateTo: to,
+      studyTypes: splitValues(studyTypes),
+    });
   }
 
   function showEvidence(ids: string[]) {
@@ -140,12 +182,17 @@ export function Workspace({
         <details className="research-options">
           <summary>研究参数与 PDF</summary>
           <div className="option-grid">
-            <label>PICO / 人群<input placeholder="可选研究人群" /></label>
-            <label>关键词<input placeholder="以逗号分隔" /></label>
-            <label>年份<input placeholder="2020–2026" /></label>
-            <label>研究类型<input placeholder="队列、RCT…" /></label>
+            <label>人群（P）<input value={population} onChange={(event) => setPopulation(event.target.value)} placeholder="可选研究人群" /></label>
+            <label>干预/暴露（I）<input value={intervention} onChange={(event) => setIntervention(event.target.value)} placeholder="可选干预或暴露" /></label>
+            <label>对照（C）<input value={comparison} onChange={(event) => setComparison(event.target.value)} placeholder="可选对照" /></label>
+            <label>结局（O）<input value={outcomes} onChange={(event) => setOutcomes(event.target.value)} placeholder="以逗号分隔" /></label>
+            <label>关键词<input value={keywords} onChange={(event) => setKeywords(event.target.value)} placeholder="以逗号分隔" /></label>
+            <label>研究类型<input value={studyTypes} onChange={(event) => setStudyTypes(event.target.value)} placeholder="队列、RCT…" /></label>
+            <label>起始年份<input inputMode="numeric" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} placeholder="2020" /></label>
+            <label>结束年份<input inputMode="numeric" value={dateTo} onChange={(event) => setDateTo(event.target.value)} placeholder="2026" /></label>
           </div>
           <label className="pdf-drop">拖入文本型 PDF，或点击选择文件<input type="file" accept=".pdf,application/pdf" /></label>
+          {briefError ? <p className="brief-error" role="alert">{briefError}</p> : null}
         </details>
         <div className="composer">
           <textarea
@@ -168,7 +215,13 @@ export function Workspace({
 
       <section className="report-pane" aria-label="研究报告">
         {report ? (
-          <ReportDocument report={report} updating={reportUpdating} onEvidence={showEvidence} />
+          <ReportDocument
+            report={report}
+            updating={reportUpdating}
+            onEvidence={showEvidence}
+            onExport={onExport}
+            exportDisabled={pending}
+          />
         ) : (
           <div className="report-waiting">
             <span><FileText size={26} aria-hidden="true" /></span>
@@ -187,18 +240,32 @@ function ReportDocument({
   report,
   updating,
   onEvidence,
+  onExport,
+  exportDisabled,
 }: {
   report: Report;
   updating: boolean;
   onEvidence: (ids: string[]) => void;
+  onExport?: (format: ExportFormat) => Promise<void> | void;
+  exportDisabled: boolean;
 }) {
   return (
     <article className="report-document">
       <header className="report-header">
         <div><span className="pane-kicker">完整报告 · v{report.version}</span><h1>{report.title}</h1></div>
-        {updating ? <span className="report-updating">更新中</span> : null}
+        <div className="report-actions">
+          {updating ? <span className="report-updating">更新中</span> : null}
+          <button type="button" disabled={exportDisabled} onClick={() => void onExport?.("markdown")}><Download size={15} aria-hidden="true" />Markdown</button>
+          <button type="button" disabled={exportDisabled} onClick={() => void onExport?.("print_html")}><Printer size={15} aria-hidden="true" />打印</button>
+        </div>
       </header>
       <p className="report-summary">{report.summary}</p>
+      <ReportSection title="进展时间线">
+        <ul>{report.timeline.map((item) => <li key={item}>{item}</li>)}</ul>
+      </ReportSection>
+      <ReportSection title="主题版图">
+        <ul>{report.themes.map((item) => <li key={item}>{item}</li>)}</ul>
+      </ReportSection>
       <ReportSection title="主要结论">
         {report.claims.map((claim) => (
           <div className="claim" key={claim.id}>
@@ -219,15 +286,38 @@ function ReportDocument({
             <article className="recommendation-card" data-testid="recommendation-card" key={item.id}>
               <span>0{index + 1}</span><FlaskConical size={20} aria-hidden="true" />
               <h3>{item.title}</h3><p>{item.rationale}</p>
-              <dl><div><dt>可检验假设</dt><dd>{item.hypothesis}</dd></div><div><dt>最小验证</dt><dd>{item.minimalValidation}</dd></div><div><dt>停止条件</dt><dd>{item.stopCondition}</dd></div></dl>
+              <dl><div><dt>可检验假设</dt><dd>{item.hypothesis}</dd></div><div><dt>最小验证</dt><dd>{item.minimalValidation}</dd></div><div><dt>数据与资源</dt><dd>{item.resources.join("、")}</dd></div><div><dt>风险</dt><dd>{item.risks.join("、")}</dd></div><div><dt>停止条件</dt><dd>{item.stopCondition}</dd></div></dl>
               <button className="evidence-link" type="button" onClick={() => onEvidence(item.evidenceIds)}>查看 {item.evidenceIds.length} 条证据</button>
             </article>
           ))}
         </div>
       </ReportSection>
+      <ReportSection title="参考文献">
+        <ol>{report.references.map((item) => <li key={item}>{item}</li>)}</ol>
+      </ReportSection>
       <footer className="report-disclaimer">{report.disclaimer}</footer>
     </article>
   );
+}
+
+function optionalText(value: string): string | null {
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function splitValues(value: string): string[] {
+  return value
+    .split(/[,，;；]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseYear(value: string): number | null | undefined {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  if (!/^\d{4}$/.test(normalized)) return undefined;
+  const year = Number(normalized);
+  return year >= 1900 && year <= 2100 ? year : undefined;
 }
 
 function ReportSection({ title, children }: { title: string; children: React.ReactNode }) {

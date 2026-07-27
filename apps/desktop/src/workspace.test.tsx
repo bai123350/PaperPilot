@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Report } from "./generated/contracts";
 import { Workspace } from "./workspace";
@@ -93,6 +93,7 @@ describe("desktop workspace", () => {
   });
 
   it("shows the complete report, exactly three plans, and traceable evidence", () => {
+    const onExport = vi.fn();
     render(
       <Workspace
         projectName="免疫耐药"
@@ -110,13 +111,74 @@ describe("desktop workspace", () => {
         messages={[]}
         operations={[]}
         report={report}
+        onExport={onExport}
       />,
     );
 
     expect(screen.getByRole("heading", { name: report.title })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "主题版图" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "参考文献" })).toBeInTheDocument();
     expect(screen.getAllByTestId("recommendation-card")).toHaveLength(3);
     fireEvent.click(screen.getAllByRole("button", { name: "查看 1 条证据" })[0]);
     expect(screen.getByText("可追溯的原文证据片段。")).toBeInTheDocument();
     expect(screen.getByText("page 2")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
+    expect(onExport).toHaveBeenCalledWith("markdown");
+  });
+
+  it("passes optional research parameters as a structured brief", () => {
+    const onStart = vi.fn();
+    render(
+      <Workspace
+        projectName="免疫耐药"
+        run={null}
+        messages={[]}
+        operations={[]}
+        report={null}
+        onStart={onStart}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("人群（P）"), { target: { value: "晚期 NSCLC" } });
+    fireEvent.change(screen.getByLabelText("结局（O）"), { target: { value: "OS，PFS" } });
+    fireEvent.change(screen.getByLabelText("关键词"), { target: { value: "PD-1, resistance" } });
+    fireEvent.change(screen.getByLabelText("起始年份"), { target: { value: "2020" } });
+    fireEvent.change(screen.getByLabelText("结束年份"), { target: { value: "2026" } });
+    fireEvent.change(screen.getByLabelText("输入研究问题"), { target: { value: "哪些标志物相关？" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(onStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question: "哪些标志物相关？",
+        population: "晚期 NSCLC",
+        outcomes: ["OS", "PFS"],
+        keywords: ["PD-1", "resistance"],
+        dateFrom: 2020,
+        dateTo: 2026,
+      }),
+    );
+  });
+
+  it("rejects an inverted research date range before starting", () => {
+    const onStart = vi.fn();
+    render(
+      <Workspace
+        projectName="免疫耐药"
+        run={null}
+        messages={[]}
+        operations={[]}
+        report={null}
+        onStart={onStart}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("起始年份"), { target: { value: "2026" } });
+    fireEvent.change(screen.getByLabelText("结束年份"), { target: { value: "2020" } });
+    fireEvent.change(screen.getByLabelText("输入研究问题"), { target: { value: "哪些标志物相关？" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("起始年份不能晚于结束年份");
+    expect(onStart).not.toHaveBeenCalled();
   });
 });

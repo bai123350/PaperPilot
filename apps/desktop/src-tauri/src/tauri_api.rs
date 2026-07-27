@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::{
     CONTRACT_VERSION,
@@ -34,8 +34,8 @@ pub fn start_run(
     project_id: String,
     brief: ResearchBrief,
 ) -> CommandResult<ResearchRun> {
-    let run = service.start_run(&project_id, brief).map_err(safe_error)?;
-    emit_run(&app, &run, "完整报告已通过引用审计。")?;
+    let run = service.queue_run(&project_id, brief).map_err(safe_error)?;
+    spawn_run(app, run.id.clone());
     Ok(run)
 }
 
@@ -56,8 +56,14 @@ pub fn resume_run(
     service: State<'_, DesktopService>,
     run_id: String,
 ) -> CommandResult<ResearchRun> {
-    let run = service.resume_run(&run_id).map_err(safe_error)?;
-    emit_run(&app, &run, "研究运行已恢复。")?;
+    let run = service.get_run_snapshot(&run_id).map_err(safe_error)?.run;
+    if !matches!(
+        run.status,
+        crate::contracts::RunStatus::Waiting | crate::contracts::RunStatus::Retrying
+    ) {
+        return Err("run is not ready for this operation".into());
+    }
+    spawn_run(app, run_id);
     Ok(run)
 }
 
@@ -108,10 +114,7 @@ pub fn export_report(
 }
 
 #[tauri::command]
-pub fn delete_project(
-    service: State<'_, DesktopService>,
-    project_id: String,
-) -> CommandResult<()> {
+pub fn delete_project(service: State<'_, DesktopService>, project_id: String) -> CommandResult<()> {
     service.delete_project(&project_id).map_err(safe_error)
 }
 
@@ -130,6 +133,41 @@ fn emit_run(app: &AppHandle, run: &ResearchRun, summary: &str) -> CommandResult<
         },
     )
     .map_err(|_| "desktop event delivery failed".into())
+}
+
+fn spawn_run(app: AppHandle, run_id: String) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let service = app.state::<DesktopService>();
+        let result = service.execute_run_with_observer(&run_id, |event| {
+            let _ = app.emit("paperpilot://run-event", event);
+        });
+        if result.is_err() {
+            let waiting = service.wait_run(&run_id);
+            let snapshot = service.get_run_snapshot(&run_id);
+            if let (Ok(run), Ok(snapshot)) = (waiting, snapshot) {
+                if run.status == crate::contracts::RunStatus::Cancelled {
+                    return;
+                }
+                let sequence = snapshot
+                    .operations
+                    .last()
+                    .map_or(1, |operation| operation.sequence + 1);
+                let _ = app.emit(
+                    "paperpilot://run-event",
+                    RunEvent {
+                        contract_version: CONTRACT_VERSION.into(),
+                        run_id,
+                        sequence,
+                        status: run.status,
+                        stage: run.stage,
+                        progress: run.progress,
+                        operation: None,
+                        safe_summary: "研究运行已暂停，可稍后恢复。".into(),
+                    },
+                );
+            }
+        }
+    });
 }
 
 fn safe_error(error: impl std::fmt::Display) -> String {

@@ -73,6 +73,17 @@ export interface RunSnapshot {
   operations: RunOperation[];
 }
 
+export interface RunEvent {
+  contractVersion: string;
+  runId: string;
+  sequence: number;
+  status: RunStatus;
+  stage: string | null;
+  progress: number;
+  operation: RunOperation | null;
+  safeSummary: string;
+}
+
 export type MessageAction = "discuss" | "revise_report";
 
 export interface MessageResult {
@@ -80,6 +91,14 @@ export interface MessageResult {
   action: MessageAction;
   reportUpdated: boolean;
   reportVersion: number;
+}
+
+export type ExportFormat = "markdown" | "print_html";
+
+export interface ExportResult {
+  format: ExportFormat;
+  suggestedFilename: string;
+  content: string;
 }
 
 export interface EvidenceRecord {

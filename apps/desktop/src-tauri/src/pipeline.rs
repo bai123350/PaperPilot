@@ -6,8 +6,8 @@ use crate::{
     CONTRACT_VERSION,
     contracts::{
         Claim, ConversationMessage, EvidenceRecord, MessageAction, MessageResult, Project,
-        Recommendation, Report, ResearchBrief, ResearchRun, RunOperation, RunSnapshot, RunStatus,
-        validate_report,
+        Recommendation, Report, ResearchBrief, ResearchRun, RunEvent, RunOperation, RunSnapshot,
+        RunStatus, validate_report,
     },
     storage::{LocalStore, StorageError},
 };
@@ -15,10 +15,18 @@ use crate::{
 const STAGES: [(&str, &str, &str); 9] = [
     ("structure_question", "问题结构化", "已形成结构化研究问题。"),
     ("search_sources", "多源检索", "已检索固定演示文献。"),
-    ("deduplicate", "标识归一化与去重", "已按 PMID、PMCID、DOI 和标题去重。"),
+    (
+        "deduplicate",
+        "标识归一化与去重",
+        "已按 PMID、PMCID、DOI 和标题去重。",
+    ),
     ("screen", "相关性筛选", "已保留与研究问题相关的文献。"),
     ("parse", "全文解析", "已提取可定位的分页文本。"),
-    ("create_evidence", "证据抽取", "已创建不可变 Evidence Record。"),
+    (
+        "create_evidence",
+        "证据抽取",
+        "已创建不可变 Evidence Record。",
+    ),
     ("synthesize", "研究综合", "已形成证据支持的主要结论。"),
     ("recommend", "下一步建议", "已生成恰好三个可检验方案。"),
     ("citation_audit", "引用审计", "主要结论证据覆盖率为 100%。"),
@@ -51,11 +59,7 @@ impl ResearchEngine {
         Ok(self.store.create_run(project_id, &brief)?)
     }
 
-    pub fn create_project(
-        &self,
-        name: &str,
-        description: &str,
-    ) -> Result<Project, PipelineError> {
+    pub fn create_project(&self, name: &str, description: &str) -> Result<Project, PipelineError> {
         Ok(self.store.create_project(name, description)?)
     }
 
@@ -78,22 +82,54 @@ impl ResearchEngine {
         )?)
     }
 
+    pub fn wait_run(&self, run_id: &str) -> Result<ResearchRun, PipelineError> {
+        let run = self.store.get_run(run_id)?;
+        if run.status == RunStatus::Cancelled {
+            return Ok(run);
+        }
+        Ok(self.store.update_run(
+            run_id,
+            RunStatus::Waiting,
+            run.stage.as_deref(),
+            run.progress,
+            run.report_version,
+        )?)
+    }
+
     pub fn resume_run(&self, run_id: &str) -> Result<ResearchRun, PipelineError> {
         self.execute_demo_run(run_id)
     }
 
     pub fn execute_demo_run(&self, run_id: &str) -> Result<ResearchRun, PipelineError> {
+        self.execute_demo_run_with_observer(run_id, |_| {})
+    }
+
+    pub fn execute_demo_run_with_observer<F>(
+        &self,
+        run_id: &str,
+        mut observer: F,
+    ) -> Result<ResearchRun, PipelineError>
+    where
+        F: FnMut(RunEvent),
+    {
         let run = self.store.get_run(run_id)?;
-        if !matches!(run.status, RunStatus::Queued | RunStatus::Waiting | RunStatus::Retrying) {
+        if !matches!(
+            run.status,
+            RunStatus::Queued | RunStatus::Waiting | RunStatus::Retrying
+        ) {
             return Err(PipelineError::InvalidState);
         }
         self.store
             .update_run(run_id, RunStatus::Running, Some(STAGES[0].0), 0, 0)?;
 
         for (index, (kind, title, summary)) in STAGES.iter().enumerate() {
+            let current = self.store.get_run(run_id)?;
+            if current.status == RunStatus::Cancelled {
+                return Ok(current);
+            }
             let sequence = index as u64 + 1;
             let progress = (((index + 1) * 100) / STAGES.len()) as u8;
-            self.store.save_operation(&RunOperation {
+            let operation = RunOperation {
                 id: Uuid::new_v4().to_string(),
                 run_id: run_id.into(),
                 sequence,
@@ -103,11 +139,27 @@ impl ResearchEngine {
                 summary: (*summary).into(),
                 status: "completed".into(),
                 created_at: Utc::now(),
-            })?;
-            self.store
-                .update_run(run_id, RunStatus::Running, Some(kind), progress, 0)?;
+            };
+            self.store.save_operation(&operation)?;
+            let persisted_run =
+                self.store
+                    .update_run(run_id, RunStatus::Running, Some(kind), progress, 0)?;
+            observer(RunEvent {
+                contract_version: CONTRACT_VERSION.into(),
+                run_id: run_id.into(),
+                sequence,
+                status: persisted_run.status,
+                stage: persisted_run.stage,
+                progress: persisted_run.progress,
+                operation: Some(operation),
+                safe_summary: (*summary).into(),
+            });
         }
 
+        let current = self.store.get_run(run_id)?;
+        if current.status == RunStatus::Cancelled {
+            return Ok(current);
+        }
         let evidence = demo_evidence(run_id);
         for record in &evidence {
             self.store.save_evidence(record)?;
@@ -125,20 +177,27 @@ impl ResearchEngine {
             report_version: Some(1),
             created_at: Utc::now(),
         })?;
-        Ok(self
-            .store
-            .update_run(run_id, RunStatus::Completed, Some("citation_audit"), 100, 1)?)
+        let completed =
+            self.store
+                .update_run(run_id, RunStatus::Completed, Some("citation_audit"), 100, 1)?;
+        observer(RunEvent {
+            contract_version: CONTRACT_VERSION.into(),
+            run_id: run_id.into(),
+            sequence: STAGES.len() as u64 + 1,
+            status: completed.status,
+            stage: completed.stage.clone(),
+            progress: completed.progress,
+            operation: None,
+            safe_summary: "完整报告已通过引用审计。".into(),
+        });
+        Ok(completed)
     }
 
     pub fn get_run_snapshot(&self, run_id: &str) -> Result<RunSnapshot, PipelineError> {
         Ok(self.store.run_snapshot(run_id)?)
     }
 
-    pub fn get_report(
-        &self,
-        run_id: &str,
-        version: Option<u32>,
-    ) -> Result<Report, PipelineError> {
+    pub fn get_report(&self, run_id: &str, version: Option<u32>) -> Result<Report, PipelineError> {
         Ok(self.store.get_report(run_id, version)?)
     }
 
@@ -230,7 +289,14 @@ fn classify_intent(content: &str) -> MessageAction {
         return MessageAction::Discuss;
     }
     const REVISION_MARKERS: [&str; 8] = [
-        "把", "请将", "调整", "修改", "纠正", "改为", "补充", "限制为",
+        "把",
+        "请将",
+        "调整",
+        "修改",
+        "纠正",
+        "改为",
+        "补充",
+        "限制为",
     ];
     if REVISION_MARKERS
         .iter()
@@ -274,7 +340,10 @@ fn demo_evidence(run_id: &str) -> Vec<EvidenceRecord> {
 }
 
 fn demo_report(run_id: &str, version: u32, evidence: Vec<EvidenceRecord>) -> Report {
-    let evidence_ids = evidence.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    let evidence_ids = evidence
+        .iter()
+        .map(|item| item.id.clone())
+        .collect::<Vec<_>>();
     let recommendations = [
         ("外部队列验证", "在现有独立队列中验证标志物组合。"),
         ("检测流程一致性研究", "量化实验室和批次间变异。"),

@@ -27,12 +27,34 @@ fn desktop_service_exposes_the_local_project_run_report_and_delete_flow() {
         )
         .unwrap();
     assert_eq!(run.status, RunStatus::Completed);
-    assert_eq!(service.get_run_snapshot(&run.id).unwrap().operations.len(), 9);
-    assert_eq!(service.get_report(&run.id, None).unwrap().recommendations.len(), 3);
+    assert_eq!(
+        service.get_run_snapshot(&run.id).unwrap().operations.len(),
+        9
+    );
+    assert_eq!(
+        service
+            .get_report(&run.id, None)
+            .unwrap()
+            .recommendations
+            .len(),
+        3
+    );
 
-    let export = service.export_report(&run.id, ExportFormat::Markdown).unwrap();
+    let export = service
+        .export_report(&run.id, ExportFormat::Markdown)
+        .unwrap();
+    assert!(export.content.contains("## 进展时间线"));
+    assert!(export.content.contains("## 主题版图"));
     assert!(export.content.contains("## 三个下一步方案"));
+    assert!(export.content.contains("## 参考文献"));
     assert!(export.content.contains("仅供科研用途"));
+
+    let print_export = service
+        .export_report(&run.id, ExportFormat::PrintHtml)
+        .unwrap();
+    assert!(print_export.content.contains("<h2>主要结论</h2>"));
+    assert!(print_export.content.contains("<h2>三个下一步方案</h2>"));
+    assert!(print_export.content.contains("<h2>参考文献</h2>"));
 
     service.delete_project(&project.id).unwrap();
     assert!(service.list_projects().unwrap().is_empty());

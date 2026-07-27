@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::{
     contracts::{
         EvidenceRecord, ExportFormat, ExportResult, MessageResult, Project, Report, ResearchBrief,
-        ResearchRun, RunSnapshot,
+        ResearchRun, RunEvent, RunSnapshot,
     },
     pipeline::{PipelineError, ResearchEngine},
     storage::LocalStore,
@@ -51,8 +51,41 @@ impl DesktopService {
         project_id: &str,
         brief: ResearchBrief,
     ) -> Result<ResearchRun, CommandError> {
-        let run = self.engine.create_run(project_id, brief)?;
-        Ok(self.engine.execute_demo_run(&run.id)?)
+        self.start_run_with_observer(project_id, brief, |_| {})
+    }
+
+    pub fn start_run_with_observer<F>(
+        &self,
+        project_id: &str,
+        brief: ResearchBrief,
+        observer: F,
+    ) -> Result<ResearchRun, CommandError>
+    where
+        F: FnMut(RunEvent),
+    {
+        let run = self.queue_run(project_id, brief)?;
+        self.execute_run_with_observer(&run.id, observer)
+    }
+
+    pub fn queue_run(
+        &self,
+        project_id: &str,
+        brief: ResearchBrief,
+    ) -> Result<ResearchRun, CommandError> {
+        Ok(self.engine.create_run(project_id, brief)?)
+    }
+
+    pub fn execute_run_with_observer<F>(
+        &self,
+        run_id: &str,
+        observer: F,
+    ) -> Result<ResearchRun, CommandError>
+    where
+        F: FnMut(RunEvent),
+    {
+        Ok(self
+            .engine
+            .execute_demo_run_with_observer(run_id, observer)?)
     }
 
     pub fn cancel_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
@@ -63,6 +96,23 @@ impl DesktopService {
         Ok(self.engine.resume_run(run_id)?)
     }
 
+    pub fn resume_run_with_observer<F>(
+        &self,
+        run_id: &str,
+        observer: F,
+    ) -> Result<ResearchRun, CommandError>
+    where
+        F: FnMut(RunEvent),
+    {
+        Ok(self
+            .engine
+            .execute_demo_run_with_observer(run_id, observer)?)
+    }
+
+    pub fn wait_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
+        Ok(self.engine.wait_run(run_id)?)
+    }
+
     pub fn send_message(&self, run_id: &str, content: &str) -> Result<MessageResult, CommandError> {
         Ok(self.engine.send_message(run_id, content)?)
     }
@@ -71,11 +121,7 @@ impl DesktopService {
         Ok(self.engine.get_run_snapshot(run_id)?)
     }
 
-    pub fn get_report(
-        &self,
-        run_id: &str,
-        version: Option<u32>,
-    ) -> Result<Report, CommandError> {
+    pub fn get_report(&self, run_id: &str, version: Option<u32>) -> Result<Report, CommandError> {
         Ok(self.engine.get_report(run_id, version)?)
     }
 
@@ -114,6 +160,8 @@ impl DesktopService {
 }
 
 fn report_markdown(report: &Report) -> String {
+    let timeline = markdown_list(&report.timeline);
+    let themes = markdown_list(&report.themes);
     let claims = report
         .claims
         .iter()
@@ -126,26 +174,118 @@ fn report_markdown(report: &Report) -> String {
         .enumerate()
         .map(|(index, item)| {
             format!(
-                "### {}. {}\n\n- **依据：** {}\n- **可检验假设：** {}\n- **最小验证：** {}\n- **停止条件：** {}",
+                "### {}. {}\n\n- **依据：** {}\n- **可检验假设：** {}\n- **最小验证：** {}\n- **数据与资源：** {}\n- **风险：** {}\n- **停止条件：** {}",
                 index + 1,
                 item.title,
                 item.rationale,
                 item.hypothesis,
                 item.minimal_validation,
+                item.resources.join("、"),
+                item.risks.join("、"),
                 item.stop_condition
             )
         })
         .collect::<Vec<_>>()
         .join("\n\n");
+    let references = markdown_list(&report.references);
     format!(
-        "# {}\n\n{}\n\n## 主要结论\n\n{}\n\n## 三个下一步方案\n\n{}\n\n---\n\n{}",
-        report.title, report.summary, claims, recommendations, report.disclaimer
+        "# {}\n\n{}\n\n## 进展时间线\n\n{}\n\n## 主题版图\n\n{}\n\n## 主要结论\n\n{}\n\n## 争议与局限\n\n{}\n\n## 研究空白\n\n{}\n\n## 三个下一步方案\n\n{}\n\n## 参考文献\n\n{}\n\n---\n\n{}",
+        report.title,
+        report.summary,
+        timeline,
+        themes,
+        claims,
+        markdown_list(
+            &report
+                .controversies
+                .iter()
+                .chain(report.limitations.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+        ),
+        markdown_list(&report.gaps),
+        recommendations,
+        references,
+        report.disclaimer
     )
 }
 
 fn report_print_html(report: &Report) -> String {
+    let claims = report
+        .claims
+        .iter()
+        .map(|claim| {
+            format!(
+                "<li>{} <small>[{}]</small></li>",
+                escape_html(&claim.statement),
+                escape_html(&claim.evidence_ids.join(", "))
+            )
+        })
+        .collect::<String>();
+    let recommendations = report
+        .recommendations
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            format!(
+                "<article><h3>{}. {}</h3><p>{}</p><dl><dt>可检验假设</dt><dd>{}</dd><dt>最小验证</dt><dd>{}</dd><dt>数据与资源</dt><dd>{}</dd><dt>风险</dt><dd>{}</dd><dt>停止条件</dt><dd>{}</dd></dl></article>",
+                index + 1,
+                escape_html(&item.title),
+                escape_html(&item.rationale),
+                escape_html(&item.hypothesis),
+                escape_html(&item.minimal_validation),
+                escape_html(&item.resources.join("、")),
+                escape_html(&item.risks.join("、")),
+                escape_html(&item.stop_condition)
+            )
+        })
+        .collect::<String>();
     format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>{}</title><h1>{}</h1><p>{}</p><p>{}</p>",
-        report.title, report.title, report.summary, report.disclaimer
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>{}</title><style>body{{max-width:920px;margin:40px auto;font:15px/1.7 system-ui;color:#26342d}}h1,h2{{line-height:1.25}}section{{margin:32px 0}}article{{break-inside:avoid;border:1px solid #d9e0dc;padding:16px;margin:12px 0}}dt{{font-weight:700}}dd{{margin:0 0 8px}}footer{{margin-top:40px;padding-top:20px;border-top:1px solid #d9e0dc;color:#68756e}}</style></head><body><h1>{}</h1><p>{}</p><section><h2>进展时间线</h2>{}</section><section><h2>主题版图</h2>{}</section><section><h2>主要结论</h2><ul>{}</ul></section><section><h2>争议与局限</h2>{}{}</section><section><h2>研究空白</h2>{}</section><section><h2>三个下一步方案</h2>{}</section><section><h2>参考文献</h2>{}</section><footer>{}</footer></body></html>",
+        escape_html(&report.title),
+        escape_html(&report.title),
+        escape_html(&report.summary),
+        html_list(&report.timeline),
+        html_list(&report.themes),
+        claims,
+        html_list(&report.controversies),
+        html_list(&report.limitations),
+        html_list(&report.gaps),
+        recommendations,
+        html_list(&report.references),
+        escape_html(&report.disclaimer)
     )
+}
+
+fn markdown_list(items: &[String]) -> String {
+    if items.is_empty() {
+        return "- 暂无".into();
+    }
+    items
+        .iter()
+        .map(|item| format!("- {item}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn html_list(items: &[String]) -> String {
+    if items.is_empty() {
+        return "<p>暂无</p>".into();
+    }
+    format!(
+        "<ul>{}</ul>",
+        items
+            .iter()
+            .map(|item| format!("<li>{}</li>", escape_html(item)))
+            .collect::<String>()
+    )
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
