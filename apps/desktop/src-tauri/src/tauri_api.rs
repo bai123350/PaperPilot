@@ -7,6 +7,8 @@ use crate::{
         EvidenceRecord, ExportFormat, ExportResult, MessageResult, Project, Report, ResearchBrief,
         ResearchRun, RunEvent, RunSnapshot,
     },
+    live_research::OpenAiResearchBackend,
+    provider_settings::{ModelSettings, ModelSettingsInput, ModelSettingsStore},
 };
 
 type CommandResult<T> = Result<T, String>;
@@ -28,6 +30,21 @@ pub fn list_projects(service: State<'_, DesktopService>) -> CommandResult<Vec<Pr
 }
 
 #[tauri::command]
+pub fn get_model_settings(
+    settings: State<'_, ModelSettingsStore>,
+) -> CommandResult<Option<ModelSettings>> {
+    settings.get().map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn save_model_settings(
+    settings: State<'_, ModelSettingsStore>,
+    input: ModelSettingsInput,
+) -> CommandResult<ModelSettings> {
+    settings.save(input).map_err(safe_error)
+}
+
+#[tauri::command]
 pub fn start_run(
     app: AppHandle,
     service: State<'_, DesktopService>,
@@ -36,6 +53,18 @@ pub fn start_run(
 ) -> CommandResult<ResearchRun> {
     let run = service.queue_run(&project_id, brief).map_err(safe_error)?;
     emit_run(&app, &run, 0, "研究运行已进入本地队列。")?;
+    spawn_run(app, run.id.clone());
+    Ok(run)
+}
+
+#[tauri::command]
+pub fn retry_run(
+    app: AppHandle,
+    service: State<'_, DesktopService>,
+    run_id: String,
+) -> CommandResult<ResearchRun> {
+    let run = service.retry_failed_run(&run_id).map_err(safe_error)?;
+    emit_run(&app, &run, 0, "研究运行已重新进入本地队列。")?;
     spawn_run(app, run.id.clone());
     Ok(run)
 }
@@ -75,12 +104,20 @@ pub fn resume_run(
 }
 
 #[tauri::command]
-pub fn send_message(
-    service: State<'_, DesktopService>,
+pub async fn send_message(
+    app: AppHandle,
     run_id: String,
     content: String,
 ) -> CommandResult<MessageResult> {
-    service.send_message(&run_id, &content).map_err(safe_error)
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = app.state::<ModelSettingsStore>();
+        let backend = OpenAiResearchBackend::new(settings.client_config().map_err(safe_error)?);
+        app.state::<DesktopService>()
+            .send_live_message(&run_id, &content, &backend)
+            .map_err(safe_error)
+    })
+    .await
+    .map_err(|_| "model task could not be completed".to_owned())?
 }
 
 #[tauri::command]
@@ -129,22 +166,26 @@ fn spawn_run(app: AppHandle, run_id: String) {
     tauri::async_runtime::spawn_blocking(move || {
         let emitter = app.clone();
         let service = app.state::<DesktopService>();
-        let result = service.execute_run_with_events(&run_id, |event| {
-            let _ = emitter.emit("paperpilot://run-event", event);
-        });
-        if result.is_err() {
+        let result = app
+            .state::<ModelSettingsStore>()
+            .client_config()
+            .map_err(safe_error)
+            .and_then(|config| {
+                let backend = OpenAiResearchBackend::new(config);
+                service
+                    .execute_live_run_with_events(&run_id, &backend, |event| {
+                        let _ = emitter.emit("paperpilot://run-event", event);
+                    })
+                    .map_err(safe_error)
+            });
+        if let Err(reason) = result {
             let sequence = service
                 .get_run_snapshot(&run_id)
                 .ok()
                 .and_then(|snapshot| snapshot.operations.last().map(|item| item.sequence + 1))
                 .unwrap_or(1);
             if let Ok(failed) = service.fail_run(&run_id) {
-                let _ = emit_run(
-                    &app,
-                    &failed,
-                    sequence,
-                    "本地研究运行失败，可检查设置后重试。",
-                );
+                let _ = emit_run(&app, &failed, sequence, &format!("研究运行失败：{reason}"));
             }
         }
     });

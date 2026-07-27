@@ -77,7 +77,7 @@ describe("desktop workspace", () => {
             operationKind: "search_sources",
             stage: "search_sources",
             title: "多源检索",
-            summary: "已检索固定演示文献。",
+            summary: "已检索真实文献来源。",
             status: "completed",
             createdAt: "2026-07-24T00:00:00Z",
           },
@@ -89,6 +89,7 @@ describe("desktop workspace", () => {
     expect(screen.getByRole("heading", { name: "研究对话" })).toBeInTheDocument();
     expect(screen.getByText("多源检索")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "报告生成中" })).toBeInTheDocument();
+    expect(screen.getByLabelText("继续研究对话")).toBeDisabled();
     expect(screen.getByTestId("workspace")).toHaveClass("desktop-workspace");
   });
 
@@ -120,11 +121,48 @@ describe("desktop workspace", () => {
     expect(screen.getByRole("heading", { name: "主题版图" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "参考文献" })).toBeInTheDocument();
     expect(screen.getAllByTestId("recommendation-card")).toHaveLength(3);
+    expect(screen.getByLabelText("继续研究对话")).toBeEnabled();
     fireEvent.click(screen.getAllByRole("button", { name: "查看 1 条证据" })[0]);
     expect(screen.getByText("可追溯的原文证据片段。")).toBeInTheDocument();
     expect(screen.getByText("page 2")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
     expect(onExport).toHaveBeenCalledWith("markdown");
+  });
+
+  it("shows an honest failure state without rendering an invented report", () => {
+    const onRetry = vi.fn();
+    const onOpenSettings = vi.fn();
+    render(
+      <Workspace
+        projectName="失败研究"
+        run={{
+          id: "run-failed",
+          projectId: "project-1",
+          status: "failed",
+          stage: "synthesize",
+          progress: 66,
+          reportVersion: 0,
+          createdAt: "2026-07-24T00:00:00Z",
+          updatedAt: "2026-07-24T00:01:00Z",
+          completedAt: null,
+        }}
+        messages={[]}
+        operations={[]}
+        report={null}
+        failureReason="研究运行失败：模型返回的证据抽取格式无效。"
+        onRetry={onRetry}
+        onOpenSettings={onOpenSettings}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "研究运行失败" })).toBeInTheDocument();
+    expect(screen.getByText(/证据抽取格式无效/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "报告生成中" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("继续研究对话")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "模型设置" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新运行" }));
+    expect(onOpenSettings).toHaveBeenCalled();
+    expect(onRetry).toHaveBeenCalled();
   });
 
   it("passes optional research parameters as a structured brief", () => {

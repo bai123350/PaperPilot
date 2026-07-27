@@ -7,6 +7,7 @@ use crate::{
         EvidenceRecord, ExportFormat, ExportResult, MessageResult, Project, Report, ResearchBrief,
         ResearchRun, RunEvent, RunSnapshot,
     },
+    live_research::LiveResearchBackend,
     pipeline::{PipelineError, ResearchEngine},
     storage::LocalStore,
 };
@@ -54,6 +55,10 @@ impl DesktopService {
         self.start_run_with_observer(project_id, brief, |_| {})
     }
 
+    pub fn retry_failed_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
+        Ok(self.engine.retry_failed_run(run_id)?)
+    }
+
     pub fn start_run_with_observer<F>(
         &self,
         project_id: &str,
@@ -84,6 +89,21 @@ impl DesktopService {
         F: FnMut(crate::contracts::RunEvent),
     {
         Ok(self.engine.execute_demo_run_with_events(run_id, on_event)?)
+    }
+
+    pub fn execute_live_run_with_events<B, F>(
+        &self,
+        run_id: &str,
+        backend: &B,
+        on_event: F,
+    ) -> Result<ResearchRun, CommandError>
+    where
+        B: LiveResearchBackend + ?Sized,
+        F: FnMut(crate::contracts::RunEvent),
+    {
+        Ok(self
+            .engine
+            .execute_live_run_with_events(run_id, backend, on_event)?)
     }
 
     pub fn execute_run_with_observer<F>(
@@ -126,6 +146,15 @@ impl DesktopService {
 
     pub fn send_message(&self, run_id: &str, content: &str) -> Result<MessageResult, CommandError> {
         Ok(self.engine.send_message(run_id, content)?)
+    }
+
+    pub fn send_live_message<B: LiveResearchBackend + ?Sized>(
+        &self,
+        run_id: &str,
+        content: &str,
+        backend: &B,
+    ) -> Result<MessageResult, CommandError> {
+        Ok(self.engine.send_live_message(run_id, content, backend)?)
     }
 
     pub fn get_run_snapshot(&self, run_id: &str) -> Result<RunSnapshot, CommandError> {

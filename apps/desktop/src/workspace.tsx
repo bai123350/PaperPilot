@@ -7,7 +7,9 @@ import {
   FileText,
   FlaskConical,
   Printer,
+  RotateCcw,
   Send,
+  Settings,
   UserRound,
   X,
 } from "lucide-react";
@@ -34,6 +36,9 @@ interface WorkspaceProps {
   onSend?: (content: string) => Promise<void> | void;
   onStart?: (brief: ResearchBrief) => Promise<void> | void;
   onExport?: (format: ExportFormat) => Promise<void> | void;
+  failureReason?: string | null;
+  onRetry?: () => Promise<void> | void;
+  onOpenSettings?: () => void;
 }
 
 type TimelineEntry =
@@ -51,6 +56,9 @@ export function Workspace({
   onSend,
   onStart,
   onExport,
+  failureReason,
+  onRetry,
+  onOpenSettings,
 }: WorkspaceProps) {
   const [content, setContent] = useState("");
   const [evidence, setEvidence] = useState<EvidenceRecord | null>(null);
@@ -63,6 +71,7 @@ export function Workspace({
   const [dateTo, setDateTo] = useState("");
   const [studyTypes, setStudyTypes] = useState("");
   const [briefError, setBriefError] = useState<string | null>(null);
+  const canCompose = !run || run.status === "completed";
   const timeline = useMemo<TimelineEntry[]>(
     () =>
       [
@@ -205,9 +214,16 @@ export function Workspace({
                 void submit();
               }
             }}
-            placeholder={run ? "追问证据或描述新的研究约束…" : "输入研究问题…"}
+            placeholder={
+              run?.status === "completed"
+                ? "追问证据或描述新的研究约束…"
+                : run
+                  ? "研究运行中，完成后可继续追问…"
+                  : "输入研究问题…"
+            }
+            disabled={pending || !canCompose}
           />
-          <button type="button" onClick={() => void submit()} disabled={!content.trim() || pending} aria-label="发送">
+          <button type="button" onClick={() => void submit()} disabled={!content.trim() || pending || !canCompose} aria-label="发送">
             <Send size={17} aria-hidden="true" />
           </button>
         </div>
@@ -222,6 +238,18 @@ export function Workspace({
             onExport={onExport}
             exportDisabled={pending}
           />
+        ) : run?.status === "failed" ? (
+          <div className="report-waiting report-failed">
+            <span><X size={26} aria-hidden="true" /></span>
+            <h2>研究运行失败</h2>
+            <p>{failureReason ?? "未生成演示或占位报告。请检查模型设置和网络连接后重新运行。"}</p>
+            <div className="failure-actions">
+              <button type="button" onClick={onOpenSettings}><Settings size={15} />模型设置</button>
+              <button type="button" onClick={() => void onRetry?.()} disabled={pending}>
+                <RotateCcw size={15} />重新运行
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="report-waiting">
             <span><FileText size={26} aria-hidden="true" /></span>
