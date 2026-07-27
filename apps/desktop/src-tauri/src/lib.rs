@@ -4,8 +4,10 @@ pub mod contracts;
 pub mod crypto;
 pub mod gateway;
 pub mod key_management;
+pub mod live_research;
 pub mod pdf_parser;
 pub mod pipeline;
+pub mod provider_settings;
 pub mod runtime;
 pub mod storage;
 mod tauri_api;
@@ -22,6 +24,7 @@ pub fn run() {
             let key = key_management::load_or_create_master_key(&data_dir)?;
             let service = commands::DesktopService::open(&data_dir, key)?;
             app.manage(service);
+            app.manage(provider_settings::ModelSettingsStore::new(&data_dir));
             let runtime = runtime::DesktopRuntimeConfig::from_env()?;
             #[cfg(windows)]
             if !runtime.demo_mode {
@@ -48,7 +51,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             tauri_api::create_project,
             tauri_api::list_projects,
+            tauri_api::get_model_settings,
+            tauri_api::save_model_settings,
             tauri_api::start_run,
+            tauri_api::retry_run,
             tauri_api::cancel_run,
             tauri_api::resume_run,
             tauri_api::send_message,

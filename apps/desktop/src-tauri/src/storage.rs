@@ -284,6 +284,21 @@ impl LocalStore {
             )
     }
 
+    pub fn get_brief(&self, run_id: &str) -> Result<ResearchBrief, StorageError> {
+        let encrypted = self
+            .connection()?
+            .query_row(
+                "SELECT brief_encrypted FROM runs WHERE id = ?1",
+                [run_id],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => StorageError::NotFound,
+                other => StorageError::Database(other),
+            })?;
+        self.decrypt_json(&format!("run:{run_id}:brief"), &encrypted)
+    }
+
     pub fn update_run(
         &self,
         run_id: &str,

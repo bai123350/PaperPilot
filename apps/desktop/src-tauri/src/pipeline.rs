@@ -9,19 +9,20 @@ use crate::{
         Recommendation, Report, ResearchBrief, ResearchRun, RunEvent, RunOperation, RunSnapshot,
         RunStatus, validate_report,
     },
+    live_research::{LiveResearchBackend, LiveResearchError},
     storage::{LocalStore, StorageError},
 };
 
 const STAGES: [(&str, &str, &str); 9] = [
     ("structure_question", "问题结构化", "已形成结构化研究问题。"),
-    ("search_sources", "多源检索", "已检索固定演示文献。"),
+    ("search_sources", "多源检索", "已检索真实文献来源。"),
     (
         "deduplicate",
         "标识归一化与去重",
         "已按 PMID、PMCID、DOI 和标题去重。",
     ),
     ("screen", "相关性筛选", "已保留与研究问题相关的文献。"),
-    ("parse", "全文解析", "已提取可定位的分页文本。"),
+    ("parse", "文献解析", "已提取可定位的摘要文本。"),
     (
         "create_evidence",
         "证据抽取",
@@ -40,6 +41,8 @@ pub enum PipelineError {
     Validation(String),
     #[error("run is not ready for this operation")]
     InvalidState,
+    #[error(transparent)]
+    Live(#[from] LiveResearchError),
 }
 
 pub struct ResearchEngine {
@@ -57,6 +60,15 @@ impl ResearchEngine {
         brief: ResearchBrief,
     ) -> Result<ResearchRun, PipelineError> {
         Ok(self.store.create_run(project_id, &brief)?)
+    }
+
+    pub fn retry_failed_run(&self, run_id: &str) -> Result<ResearchRun, PipelineError> {
+        let run = self.store.get_run(run_id)?;
+        if run.status != RunStatus::Failed {
+            return Err(PipelineError::InvalidState);
+        }
+        let brief = self.store.get_brief(run_id)?;
+        Ok(self.store.create_run(&run.project_id, &brief)?)
     }
 
     pub fn create_project(&self, name: &str, description: &str) -> Result<Project, PipelineError> {
@@ -236,6 +248,124 @@ impl ResearchEngine {
         Ok(completed)
     }
 
+    pub fn execute_live_run_with_events<B, F>(
+        &self,
+        run_id: &str,
+        backend: &B,
+        mut on_event: F,
+    ) -> Result<ResearchRun, PipelineError>
+    where
+        B: LiveResearchBackend + ?Sized,
+        F: FnMut(RunEvent),
+    {
+        let run = self.store.get_run(run_id)?;
+        if !matches!(
+            run.status,
+            RunStatus::Queued | RunStatus::Waiting | RunStatus::Retrying
+        ) {
+            return Err(PipelineError::InvalidState);
+        }
+        let brief = self.store.get_brief(run_id)?;
+        self.store.update_run(
+            run_id,
+            RunStatus::Running,
+            Some(STAGES[0].0),
+            0,
+            run.report_version,
+        )?;
+
+        self.record_live_stage(run_id, 0, &mut on_event)?;
+        let evidence = backend.collect_evidence(run_id, &brief)?;
+        self.record_live_stage(run_id, 1, &mut on_event)?;
+        self.record_live_stage(run_id, 2, &mut on_event)?;
+        self.record_live_stage(run_id, 3, &mut on_event)?;
+        self.record_live_stage(run_id, 4, &mut on_event)?;
+
+        for record in &evidence {
+            self.store.save_evidence(record)?;
+        }
+        self.record_live_stage(run_id, 5, &mut on_event)?;
+
+        let report = backend.synthesize_report(run_id, 1, &brief, &evidence, None)?;
+        self.record_live_stage(run_id, 6, &mut on_event)?;
+        self.record_live_stage(run_id, 7, &mut on_event)?;
+        validate_report(&report).map_err(PipelineError::Validation)?;
+        self.store.save_report(&report)?;
+        self.record_live_stage(run_id, 8, &mut on_event)?;
+
+        let completion_sequence = self.store.next_timeline_sequence(run_id)?;
+        self.store.save_message(&ConversationMessage {
+            id: Uuid::new_v4().to_string(),
+            run_id: run_id.into(),
+            sequence: completion_sequence,
+            role: "assistant".into(),
+            content: format!("已依据检索证据生成报告：{}", report.summary),
+            evidence_ids: report
+                .claims
+                .iter()
+                .flat_map(|claim| claim.evidence_ids.iter().cloned())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect(),
+            report_version: Some(1),
+            created_at: Utc::now(),
+        })?;
+        let completed =
+            self.store
+                .update_run(run_id, RunStatus::Completed, Some("citation_audit"), 100, 1)?;
+        on_event(RunEvent {
+            contract_version: CONTRACT_VERSION.into(),
+            run_id: run_id.into(),
+            sequence: completion_sequence + 1,
+            status: completed.status,
+            stage: completed.stage.clone(),
+            progress: completed.progress,
+            operation: None,
+            safe_summary: "完整报告已通过引用审计。".into(),
+        });
+        Ok(completed)
+    }
+
+    fn record_live_stage<F>(
+        &self,
+        run_id: &str,
+        index: usize,
+        on_event: &mut F,
+    ) -> Result<(), PipelineError>
+    where
+        F: FnMut(RunEvent),
+    {
+        let (kind, title, summary) = STAGES[index];
+        let sequence = index as u64 + 1;
+        let progress = (((index + 1) * 100) / STAGES.len()) as u8;
+        let operation = RunOperation {
+            id: Uuid::new_v4().to_string(),
+            run_id: run_id.into(),
+            sequence,
+            operation_kind: kind.into(),
+            stage: kind.into(),
+            title: title.into(),
+            summary: summary.into(),
+            status: "completed".into(),
+            created_at: Utc::now(),
+        };
+        self.store.save_operation(&operation)?;
+        let updated = self
+            .store
+            .update_run(run_id, RunStatus::Running, Some(kind), progress, 0)?;
+        on_event(RunEvent {
+            contract_version: CONTRACT_VERSION.into(),
+            run_id: run_id.into(),
+            sequence,
+            status: updated.status,
+            stage: updated.stage,
+            progress: updated.progress,
+            operation: Some(operation),
+            safe_summary: summary.into(),
+        });
+        Ok(())
+    }
+
     pub fn get_run_snapshot(&self, run_id: &str) -> Result<RunSnapshot, PipelineError> {
         Ok(self.store.run_snapshot(run_id)?)
     }
@@ -303,6 +433,81 @@ impl ResearchEngine {
                 )
             }
         };
+        let message = ConversationMessage {
+            id: Uuid::new_v4().to_string(),
+            run_id: run_id.into(),
+            sequence: user_sequence + 1,
+            role: "assistant".into(),
+            content: response,
+            evidence_ids,
+            report_version: Some(report_version),
+            created_at: Utc::now(),
+        };
+        self.store.save_message(&message)?;
+        Ok(MessageResult {
+            message,
+            action,
+            report_updated,
+            report_version,
+        })
+    }
+
+    pub fn send_live_message<B: LiveResearchBackend + ?Sized>(
+        &self,
+        run_id: &str,
+        content: &str,
+        backend: &B,
+    ) -> Result<MessageResult, PipelineError> {
+        let run = self.store.get_run(run_id)?;
+        if run.status != RunStatus::Completed {
+            return Err(PipelineError::InvalidState);
+        }
+        let action = classify_intent(content);
+        let current_report = self.store.get_report(run_id, None)?;
+        let brief = self.store.get_brief(run_id)?;
+        let (report_updated, report_version, response, evidence_ids) = match action {
+            MessageAction::Discuss => {
+                let reply = backend.grounded_reply(content, &current_report)?;
+                (false, run.report_version, reply.content, reply.evidence_ids)
+            }
+            MessageAction::ReviseReport => {
+                let version = run.report_version + 1;
+                let revised = backend.synthesize_report(
+                    run_id,
+                    version,
+                    &brief,
+                    &current_report.evidence,
+                    Some(content),
+                )?;
+                validate_report(&revised).map_err(PipelineError::Validation)?;
+                self.store.save_report(&revised)?;
+                self.store.update_run(
+                    run_id,
+                    RunStatus::Completed,
+                    Some("citation_audit"),
+                    100,
+                    version,
+                )?;
+                (
+                    true,
+                    version,
+                    format!("已按要求生成报告 v{version}：{}", revised.summary),
+                    vec![],
+                )
+            }
+        };
+
+        let user_sequence = self.store.next_timeline_sequence(run_id)?;
+        self.store.save_message(&ConversationMessage {
+            id: Uuid::new_v4().to_string(),
+            run_id: run_id.into(),
+            sequence: user_sequence,
+            role: "user".into(),
+            content: content.into(),
+            evidence_ids: vec![],
+            report_version: Some(run.report_version),
+            created_at: Utc::now(),
+        })?;
         let message = ConversationMessage {
             id: Uuid::new_v4().to_string(),
             run_id: run_id.into(),
