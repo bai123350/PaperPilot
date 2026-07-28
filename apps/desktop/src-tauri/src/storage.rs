@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -284,6 +284,45 @@ impl LocalStore {
             )
     }
 
+    pub fn get_latest_project_run(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<ResearchRun>, StorageError> {
+        let run_id = self
+            .connection()?
+            .query_row(
+                "SELECT id FROM runs
+                 WHERE project_id = ?1
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT 1",
+                [project_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        run_id.map(|id| self.get_run(&id)).transpose()
+    }
+
+    pub fn list_project_run_snapshots(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<RunSnapshot>, StorageError> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT id FROM runs
+             WHERE project_id = ?1
+             ORDER BY created_at ASC, id ASC",
+        )?;
+        let run_ids = statement
+            .query_map([project_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        drop(connection);
+        run_ids
+            .into_iter()
+            .map(|run_id| self.run_snapshot(&run_id))
+            .collect()
+    }
+
     pub fn get_brief(&self, run_id: &str) -> Result<ResearchBrief, StorageError> {
         let encrypted = self
             .connection()?
@@ -466,6 +505,7 @@ impl LocalStore {
         Ok(RunSnapshot {
             contract_version: CONTRACT_VERSION.into(),
             run: self.get_run(run_id)?,
+            brief: self.get_brief(run_id)?,
             messages: self.list_messages(run_id)?,
             operations: self.list_operations(run_id)?,
         })

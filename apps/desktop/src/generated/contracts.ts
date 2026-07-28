@@ -19,7 +19,7 @@ export type ConversationMessage = { id: string, runId: string, sequence: number,
 
 export type RunOperation = { id: string, runId: string, sequence: number, operationKind: string, stage: string, title: string, summary: string, status: string, createdAt: string, };
 
-export type RunSnapshot = { contractVersion: string, run: ResearchRun, messages: Array<ConversationMessage>, operations: Array<RunOperation>, };
+export type RunSnapshot = { contractVersion: string, run: ResearchRun, brief: ResearchBrief, messages: Array<ConversationMessage>, operations: Array<RunOperation>, };
 
 export type MessageResult = { message: ConversationMessage, action: MessageAction, reportUpdated: boolean, reportVersion: number, };
 

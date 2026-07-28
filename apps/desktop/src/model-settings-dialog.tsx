@@ -13,7 +13,7 @@ const providerDefaults: Record<
 > = {
   deepseek: {
     label: "DeepSeek",
-    model: "deepseek-chat",
+    model: "deepseek-v4-pro",
     baseUrl: "https://api.deepseek.com",
   },
   openai: {
@@ -163,9 +163,10 @@ export function ModelSettingsDialog({
               aria-label="模型名称"
               value={model}
               onChange={(event) => setModel(event.target.value)}
-              placeholder="例如 deepseek-chat"
-              disabled={saving}
+              placeholder="例如 deepseek-v4-pro"
+              disabled={saving || provider === "deepseek"}
             />
+            {provider === "deepseek" ? <small>DeepSeek 固定使用 V4 Pro，不使用 Flash。</small> : null}
           </label>
           <label>
             API 地址

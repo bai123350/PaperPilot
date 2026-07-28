@@ -8,6 +8,7 @@ use thiserror::Error;
 
 const CREDENTIAL_SERVICE: &str = "cn.paperpilot.desktop.model";
 const CREDENTIAL_USER: &str = "provider-api-key";
+const DEEPSEEK_PRO_MODEL: &str = "deepseek-v4-pro";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,8 +82,8 @@ impl ModelSettingsStore {
         .map_err(|_| ModelSettingsError::Read)?;
         let api_key = read_api_key()?;
         Ok(Some(ModelSettings {
+            model: normalized_model(&metadata.provider, &metadata.model),
             provider: metadata.provider,
-            model: metadata.model,
             base_url: metadata.base_url,
             configured: api_key.is_some(),
             api_key_hint: api_key.as_deref().map(mask_api_key),
@@ -129,8 +130,8 @@ impl ModelSettingsStore {
         let metadata = self.read_metadata()?.ok_or(ModelSettingsError::ApiKey)?;
         let api_key = read_api_key()?.ok_or(ModelSettingsError::ApiKey)?;
         Ok(ModelClientConfig {
+            model: normalized_model(&metadata.provider, &metadata.model),
             provider: metadata.provider,
-            model: metadata.model,
             base_url: metadata.base_url,
             api_key,
         })
@@ -158,10 +159,21 @@ fn validate(input: &ModelSettingsInput) -> Result<(), ModelSettingsError> {
     if input.model.trim().is_empty() {
         return Err(ModelSettingsError::Model);
     }
+    if input.provider == "deepseek" && input.model.trim() != DEEPSEEK_PRO_MODEL {
+        return Err(ModelSettingsError::Model);
+    }
     if !allowed_endpoint(input.base_url.trim()) {
         return Err(ModelSettingsError::Endpoint);
     }
     Ok(())
+}
+
+fn normalized_model(provider: &str, model: &str) -> String {
+    if provider == "deepseek" {
+        DEEPSEEK_PRO_MODEL.into()
+    } else {
+        model.trim().to_owned()
+    }
 }
 
 fn allowed_endpoint(endpoint: &str) -> bool {
@@ -236,17 +248,26 @@ fn save_api_key(_api_key: &str) -> Result<(), ModelSettingsError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelSettingsInput, allowed_endpoint, mask_api_key, validate};
+    use super::{ModelSettingsInput, allowed_endpoint, mask_api_key, normalized_model, validate};
 
     #[test]
     fn validates_provider_model_and_safe_endpoint() {
         let input = ModelSettingsInput {
             provider: "deepseek".into(),
-            model: "deepseek-chat".into(),
+            model: "deepseek-v4-pro".into(),
             base_url: "https://api.deepseek.com".into(),
             api_key: "secret".into(),
         };
         assert!(validate(&input).is_ok());
+        let flash = ModelSettingsInput {
+            model: "deepseek-v4-flash".into(),
+            ..input.clone()
+        };
+        assert!(validate(&flash).is_err());
+        assert_eq!(
+            normalized_model("deepseek", "deepseek-chat"),
+            "deepseek-v4-pro"
+        );
         assert!(allowed_endpoint("http://localhost:11434/v1"));
         assert!(!allowed_endpoint("http://provider.example/v1"));
     }

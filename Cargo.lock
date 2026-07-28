@@ -2340,6 +2340,7 @@ dependencies = [
  "keyring-core",
  "pdfium-bundled",
  "pdfium-render",
+ "quick-xml",
  "rand",
  "rusqlite",
  "serde",

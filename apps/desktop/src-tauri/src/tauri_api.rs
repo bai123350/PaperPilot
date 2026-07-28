@@ -30,6 +30,26 @@ pub fn list_projects(service: State<'_, DesktopService>) -> CommandResult<Vec<Pr
 }
 
 #[tauri::command]
+pub fn get_latest_project_run(
+    service: State<'_, DesktopService>,
+    project_id: String,
+) -> CommandResult<Option<ResearchRun>> {
+    service
+        .get_latest_project_run(&project_id)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
+pub fn list_project_run_snapshots(
+    service: State<'_, DesktopService>,
+    project_id: String,
+) -> CommandResult<Vec<RunSnapshot>> {
+    service
+        .list_project_run_snapshots(&project_id)
+        .map_err(safe_error)
+}
+
+#[tauri::command]
 pub fn get_model_settings(
     settings: State<'_, ModelSettingsStore>,
 ) -> CommandResult<Option<ModelSettings>> {
@@ -179,13 +199,14 @@ fn spawn_run(app: AppHandle, run_id: String) {
                     .map_err(safe_error)
             });
         if let Err(reason) = result {
+            let summary = format!("研究运行失败：{reason}");
             let sequence = service
                 .get_run_snapshot(&run_id)
                 .ok()
                 .and_then(|snapshot| snapshot.operations.last().map(|item| item.sequence + 1))
                 .unwrap_or(1);
-            if let Ok(failed) = service.fail_run(&run_id) {
-                let _ = emit_run(&app, &failed, sequence, &format!("研究运行失败：{reason}"));
+            if let Ok(failed) = service.fail_run_with_reason(&run_id, &summary) {
+                let _ = emit_run(&app, &failed, sequence, &summary);
             }
         }
     });

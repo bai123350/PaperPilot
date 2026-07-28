@@ -32,6 +32,8 @@ export interface SaveModelSettingsInput {
 
 export interface DesktopBridge {
   listProjects(): Promise<Project[]>;
+  getLatestProjectRun(projectId: string): Promise<ResearchRun | null>;
+  listProjectRunSnapshots?(projectId: string): Promise<RunSnapshot[]>;
   getModelSettings(): Promise<ModelSettings | null>;
   saveModelSettings(input: SaveModelSettingsInput): Promise<ModelSettings>;
   createProject(name: string, description: string): Promise<Project>;
@@ -47,6 +49,9 @@ export interface DesktopBridge {
 
 export const tauriBridge: DesktopBridge = {
   listProjects: () => invoke("list_projects"),
+  getLatestProjectRun: (projectId) => invoke("get_latest_project_run", { projectId }),
+  listProjectRunSnapshots: (projectId) =>
+    invoke("list_project_run_snapshots", { projectId }),
   getModelSettings: () => invoke("get_model_settings"),
   saveModelSettings: (input) => invoke("save_model_settings", { input }),
   createProject: (name, description) => invoke("create_project", { name, description }),

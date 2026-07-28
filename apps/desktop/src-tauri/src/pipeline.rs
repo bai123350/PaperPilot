@@ -9,7 +9,7 @@ use crate::{
         Recommendation, Report, ResearchBrief, ResearchRun, RunEvent, RunOperation, RunSnapshot,
         RunStatus, validate_report,
     },
-    live_research::{LiveResearchBackend, LiveResearchError},
+    live_research::{LiveResearchBackend, LiveResearchError, LiveResearchTrace},
     storage::{LocalStore, StorageError},
 };
 
@@ -32,6 +32,9 @@ const STAGES: [(&str, &str, &str); 9] = [
     ("recommend", "下一步建议", "已生成恰好三个可检验方案。"),
     ("citation_audit", "引用审计", "主要结论证据覆盖率为 100%。"),
 ];
+
+const MAX_CONVERSATION_HISTORY_MESSAGES: usize = 12;
+const REPEATED_REPLY_FALLBACK: &str = "当前 Evidence Record 没有提供超出前述回答的新信息。如需继续分析，请提出新的比较维度或研究约束。";
 
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -77,6 +80,20 @@ impl ResearchEngine {
 
     pub fn list_projects(&self) -> Result<Vec<Project>, PipelineError> {
         Ok(self.store.list_projects()?)
+    }
+
+    pub fn get_latest_project_run(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<ResearchRun>, PipelineError> {
+        Ok(self.store.get_latest_project_run(project_id)?)
+    }
+
+    pub fn list_project_run_snapshots(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<RunSnapshot>, PipelineError> {
+        Ok(self.store.list_project_run_snapshots(project_id)?)
     }
 
     pub fn delete_project(&self, project_id: &str) -> Result<(), PipelineError> {
@@ -139,6 +156,26 @@ impl ResearchEngine {
             run.progress,
             run.report_version,
         )?)
+    }
+
+    pub fn fail_run_with_reason(
+        &self,
+        run_id: &str,
+        summary: &str,
+    ) -> Result<ResearchRun, PipelineError> {
+        let failed = self.fail_run(run_id)?;
+        let sequence = self.store.next_timeline_sequence(run_id)?;
+        self.store.save_message(&ConversationMessage {
+            id: Uuid::new_v4().to_string(),
+            run_id: run_id.into(),
+            sequence,
+            role: "assistant".into(),
+            content: summary.into(),
+            evidence_ids: vec![],
+            report_version: None,
+            created_at: Utc::now(),
+        })?;
+        Ok(failed)
     }
 
     pub fn execute_demo_run_with_events<F>(
@@ -274,24 +311,315 @@ impl ResearchEngine {
             run.report_version,
         )?;
 
-        self.record_live_stage(run_id, 0, &mut on_event)?;
-        let evidence = backend.collect_evidence(run_id, &brief)?;
-        self.record_live_stage(run_id, 1, &mut on_event)?;
-        self.record_live_stage(run_id, 2, &mut on_event)?;
-        self.record_live_stage(run_id, 3, &mut on_event)?;
-        self.record_live_stage(run_id, 4, &mut on_event)?;
+        self.record_live_stage(
+            run_id,
+            0,
+            "模型正在把研究问题转换为可执行的生物医学检索式。",
+            "running",
+            &mut on_event,
+        )?;
+        let mut recorded = [false; 6];
+        let mut source_progress: Vec<(String, String)> = Vec::new();
+        let mut trace_error = None;
+        let evidence_result = backend.collect_evidence_with_trace(run_id, &brief, &mut |trace| {
+            if trace_error.is_some() {
+                return;
+            }
+            let stages = match trace {
+                LiveResearchTrace::SearchQueryBuilt { query } => vec![(
+                    0,
+                    format!("模型已生成多数据库检索式：{query}"),
+                    "completed",
+                )],
+                LiveResearchTrace::SourceSearchStarted { source } => {
+                    let detail = format!("{source}：正在检索…");
+                    if let Some(item) = source_progress
+                        .iter_mut()
+                        .find(|(name, _)| name == &source)
+                    {
+                        item.1 = detail;
+                    } else {
+                        source_progress.push((source, detail));
+                    }
+                    vec![(
+                        1,
+                        format!(
+                            "正在逐源检索真实文献：\n{}",
+                            source_progress
+                                .iter()
+                                .map(|(_, detail)| detail.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        ),
+                        "running",
+                    )]
+                }
+                LiveResearchTrace::SourcesRetrieved {
+                    source,
+                    matched_count,
+                    batch_count,
+                    returned_count,
+                    usable_count,
+                    unique_count,
+                    reached_limit,
+                } => {
+                    let detail = format!(
+                        "{source}：按相关性排序读取 {batch_count} 批，累计 {returned_count} 篇；匹配总数 {matched_count} 篇，可用摘要 {usable_count} 篇，源内唯一 {unique_count} 篇{}",
+                        if reached_limit {
+                            "（已达到本次深度检索上限）"
+                        } else {
+                            ""
+                        }
+                    );
+                    if let Some(item) = source_progress
+                        .iter_mut()
+                        .find(|(name, _)| name == &source)
+                    {
+                        item.1 = detail;
+                    } else {
+                        source_progress.push((source, detail));
+                    }
+                    vec![(
+                        1,
+                        format!(
+                            "正在逐源检索真实文献：\n{}",
+                            source_progress
+                                .iter()
+                                .map(|(_, detail)| detail.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        ),
+                        "running",
+                    )]
+                }
+                LiveResearchTrace::SourceRetrievalFailed { source, reason } => {
+                    let detail = format!("{source}：检索失败（{reason}），已继续其他来源");
+                    if let Some(item) = source_progress
+                        .iter_mut()
+                        .find(|(name, _)| name == &source)
+                    {
+                        item.1 = detail;
+                    } else {
+                        source_progress.push((source, detail));
+                    }
+                    vec![(
+                        1,
+                        format!(
+                            "正在逐源检索真实文献：\n{}",
+                            source_progress
+                                .iter()
+                                .map(|(_, detail)| detail.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        ),
+                        "running",
+                    )]
+                }
+                LiveResearchTrace::SourcesMerged {
+                    collected_count,
+                    unique_count,
+                    candidate_count,
+                } => vec![
+                    (
+                        1,
+                        format!(
+                            "多源检索完成：\n{}",
+                            source_progress
+                                .iter()
+                                .map(|(_, detail)| detail.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        ),
+                        "completed",
+                    ),
+                    (
+                        2,
+                        format!(
+                            "四库共收集 {collected_count} 条记录；按 PMID、PMCID、DOI 和规范化标题合并为 {unique_count} 篇，进入评分候选 {candidate_count} 篇。"
+                        ),
+                        "completed",
+                    ),
+                ],
+                LiveResearchTrace::RankingProgress {
+                    evaluated_count,
+                    total_count,
+                    above_threshold_count,
+                    ranked,
+                } => {
+                    let interpretations = ranked
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            format!(
+                                "{}. [{}/20][{}][{}] {} — {}{}",
+                                index + 1,
+                                item.score,
+                                item.year,
+                                item.source,
+                                item.title,
+                                item.reason,
+                                if item.included {
+                                    "（达到证据阈值）"
+                                } else {
+                                    "（仅保留检索记录）"
+                                }
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    vec![(
+                        3,
+                        format!(
+                            "模型正在分批逐篇解读高相关候选文献：已完成 {evaluated_count}/{total_count} 篇，其中 ≥7 分 {above_threshold_count} 篇。\n{interpretations}"
+                        ),
+                        "running",
+                    )]
+                }
+                LiveResearchTrace::SourcesRanked {
+                    evaluated_count,
+                    above_threshold_count,
+                    selected,
+                } => {
+                    let ranking = selected
+                        .iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            format!(
+                                "{}. [{}/20][{}][{}] {} — {}{}",
+                                index + 1,
+                                item.score,
+                                item.year,
+                                item.source,
+                                item.title,
+                                item.reason,
+                                if item.included {
+                                    "（纳入证据抽取）"
+                                } else {
+                                    "（不纳入报告证据）"
+                                }
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    vec![(
+                        3,
+                        format!(
+                            "模型已逐篇解读并展示全部 {evaluated_count} 篇去重候选文献；≥7 分的有 {above_threshold_count} 篇并全部进入证据抽取。以下按分数从高到低排列：\n{ranking}"
+                        ),
+                        "completed",
+                    )]
+                }
+                LiveResearchTrace::EvidenceExtractionProgress {
+                    extracted_count,
+                    total_count,
+                } => vec![(
+                    4,
+                    format!(
+                        "模型正在逐篇提取高相关文献证据：已完成 {extracted_count}/{total_count} 篇。"
+                    ),
+                    "running",
+                )],
+                LiveResearchTrace::EvidenceExtracted { selected_count } => vec![(
+                    4,
+                    format!(
+                        "已逐篇解析全部 {selected_count} 篇达到阈值的文献摘要，并保留可定位的原文片段。"
+                    ),
+                    "completed",
+                )],
+            };
+            for (index, summary, status) in stages {
+                if let Err(error) =
+                    self.record_live_stage(run_id, index, &summary, status, &mut on_event)
+                {
+                    trace_error = Some(error);
+                    return;
+                }
+                if status == "completed" {
+                    recorded[index] = true;
+                }
+            }
+        });
+        if let Some(error) = trace_error {
+            return Err(error);
+        }
+        let evidence = evidence_result?;
+        let fallback_summaries = [
+            "模型已完成研究问题结构化。",
+            "研究后端已返回可用的真实文献记录。",
+            "文献标识与标题归一化已完成。",
+            "模型已完成文献相关性筛选。",
+            "可定位的文献摘要解析已完成。",
+        ];
+        for (index, summary) in fallback_summaries.iter().enumerate() {
+            if !recorded[index] {
+                self.record_live_stage(run_id, index, summary, "completed", &mut on_event)?;
+            }
+        }
 
         for record in &evidence {
             self.store.save_evidence(record)?;
         }
-        self.record_live_stage(run_id, 5, &mut on_event)?;
+        self.record_live_stage(
+            run_id,
+            5,
+            &format!(
+                "已创建并加密保存 {} 条不可变 Evidence Record。",
+                evidence.len()
+            ),
+            "completed",
+            &mut on_event,
+        )?;
 
+        self.record_live_stage(
+            run_id,
+            6,
+            "模型正在基于已纳入的 Evidence Record 生成研究综合。",
+            "running",
+            &mut on_event,
+        )?;
         let report = backend.synthesize_report(run_id, 1, &brief, &evidence, None)?;
-        self.record_live_stage(run_id, 6, &mut on_event)?;
-        self.record_live_stage(run_id, 7, &mut on_event)?;
+        self.record_live_stage(
+            run_id,
+            6,
+            &format!(
+                "模型已生成研究综合：形成 {} 条有证据引用的主要结论。",
+                report.claims.len()
+            ),
+            "completed",
+            &mut on_event,
+        )?;
+        self.record_live_stage(
+            run_id,
+            7,
+            &format!(
+                "模型已生成 {} 个可检验的下一步方案。",
+                report.recommendations.len()
+            ),
+            "completed",
+            &mut on_event,
+        )?;
         validate_report(&report).map_err(PipelineError::Validation)?;
         self.store.save_report(&report)?;
-        self.record_live_stage(run_id, 8, &mut on_event)?;
+        let cited_claims = report
+            .claims
+            .iter()
+            .filter(|claim| !claim.evidence_ids.is_empty())
+            .count();
+        let coverage = if report.claims.is_empty() {
+            0
+        } else {
+            cited_claims * 100 / report.claims.len()
+        };
+        self.record_live_stage(
+            run_id,
+            8,
+            &format!(
+                "引用审计通过：{cited_claims}/{} 条主要结论有 Evidence Record，覆盖率 {coverage}%。",
+                report.claims.len()
+            ),
+            "completed",
+            &mut on_event,
+        )?;
 
         let completion_sequence = self.store.next_timeline_sequence(run_id)?;
         self.store.save_message(&ConversationMessage {
@@ -299,7 +627,11 @@ impl ResearchEngine {
             run_id: run_id.into(),
             sequence: completion_sequence,
             role: "assistant".into(),
-            content: format!("已依据检索证据生成报告：{}", report.summary),
+            content: format!(
+                "报告已生成（{} 条主要结论、{} 个下一步方案），可在右侧查看完整内容。",
+                report.claims.len(),
+                report.recommendations.len()
+            ),
             evidence_ids: report
                 .claims
                 .iter()
@@ -330,23 +662,29 @@ impl ResearchEngine {
         &self,
         run_id: &str,
         index: usize,
+        summary: &str,
+        status: &str,
         on_event: &mut F,
     ) -> Result<(), PipelineError>
     where
         F: FnMut(RunEvent),
     {
-        let (kind, title, summary) = STAGES[index];
+        let (kind, title, _) = STAGES[index];
         let sequence = index as u64 + 1;
-        let progress = (((index + 1) * 100) / STAGES.len()) as u8;
+        let progress = if status == "completed" {
+            (((index + 1) * 100) / STAGES.len()) as u8
+        } else {
+            ((index * 100) / STAGES.len()) as u8
+        };
         let operation = RunOperation {
-            id: Uuid::new_v4().to_string(),
+            id: format!("{run_id}-stage-{kind}"),
             run_id: run_id.into(),
             sequence,
             operation_kind: kind.into(),
             stage: kind.into(),
             title: title.into(),
             summary: summary.into(),
-            status: "completed".into(),
+            status: status.into(),
             created_at: Utc::now(),
         };
         self.store.save_operation(&operation)?;
@@ -465,10 +803,16 @@ impl ResearchEngine {
         let action = classify_intent(content);
         let current_report = self.store.get_report(run_id, None)?;
         let brief = self.store.get_brief(run_id)?;
+        let history = self.recent_project_conversation(&run.project_id)?;
         let (report_updated, report_version, response, evidence_ids) = match action {
             MessageAction::Discuss => {
-                let reply = backend.grounded_reply(content, &current_report)?;
-                (false, run.report_version, reply.content, reply.evidence_ids)
+                let reply = backend.grounded_reply(content, &current_report, &history)?;
+                let content = if repeats_prior_answer(&reply.content, &history) {
+                    REPEATED_REPLY_FALLBACK.into()
+                } else {
+                    reply.content
+                };
+                (false, run.report_version, content, reply.evidence_ids)
             }
             MessageAction::ReviseReport => {
                 let version = run.report_version + 1;
@@ -491,7 +835,7 @@ impl ResearchEngine {
                 (
                     true,
                     version,
-                    format!("已按要求生成报告 v{version}：{}", revised.summary),
+                    format!("报告 v{version} 已生成并保存；旧版本仍保留在本机。"),
                     vec![],
                 )
             }
@@ -526,6 +870,83 @@ impl ResearchEngine {
             report_version,
         })
     }
+
+    fn recent_project_conversation(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ConversationMessage>, PipelineError> {
+        let mut messages = self
+            .store
+            .list_project_run_snapshots(project_id)?
+            .into_iter()
+            .flat_map(|snapshot| {
+                let run_id = snapshot.run.id.clone();
+                let synthetic_question = ConversationMessage {
+                    id: format!("history:{run_id}:brief"),
+                    run_id,
+                    sequence: 0,
+                    role: "user".into(),
+                    content: snapshot.brief.question,
+                    evidence_ids: vec![],
+                    report_version: (snapshot.run.report_version > 0)
+                        .then_some(snapshot.run.report_version),
+                    created_at: snapshot.run.created_at,
+                };
+                std::iter::once(synthetic_question).chain(snapshot.messages)
+            })
+            .filter(|message| {
+                matches!(message.role.as_str(), "user" | "assistant")
+                    && !is_automatic_completion_message(message)
+            })
+            .collect::<Vec<_>>();
+        if messages.len() > MAX_CONVERSATION_HISTORY_MESSAGES {
+            messages = messages.split_off(messages.len() - MAX_CONVERSATION_HISTORY_MESSAGES);
+        }
+        Ok(messages)
+    }
+}
+
+fn is_automatic_completion_message(message: &ConversationMessage) -> bool {
+    message.role == "assistant"
+        && (message.content.starts_with("报告已生成（")
+            || message.content.starts_with("已依据检索证据生成报告：")
+            || message.content.starts_with("完整报告已生成在右侧"))
+}
+
+fn repeats_prior_answer(response: &str, history: &[ConversationMessage]) -> bool {
+    let normalized_response = normalize_for_comparison(response);
+    if normalized_response.is_empty() {
+        return false;
+    }
+    history
+        .iter()
+        .filter(|message| message.role == "assistant")
+        .map(|message| normalize_for_comparison(&message.content))
+        .any(|previous| {
+            if previous == normalized_response {
+                return true;
+            }
+            let shorter = previous
+                .chars()
+                .count()
+                .min(normalized_response.chars().count());
+            let longer = previous
+                .chars()
+                .count()
+                .max(normalized_response.chars().count());
+            shorter >= 24
+                && shorter * 100 >= longer * 80
+                && (previous.contains(&normalized_response)
+                    || normalized_response.contains(&previous))
+        })
+}
+
+fn normalize_for_comparison(content: &str) -> String {
+    content
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn classify_intent(content: &str) -> MessageAction {

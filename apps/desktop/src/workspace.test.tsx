@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Report } from "./generated/contracts";
+import type { Report, RunSnapshot } from "./generated/contracts";
 import { Workspace } from "./workspace";
 
 const report: Report = {
@@ -11,7 +11,7 @@ const report: Report = {
   version: 1,
   title: "PD-1 耐药标志物：证据图谱与下一步",
   summary: "多源证据提示三条主要耐药路径。",
-  timeline: [],
+  timeline: ["2010：早期文献建立了机制假设。", "2026：最新研究完成多模态验证。"],
   themes: ["抗原呈递"],
   claims: [
     {
@@ -50,6 +50,67 @@ const report: Report = {
   references: [],
   disclaimer: "本报告仅供科研用途。",
   createdAt: "2026-07-24T00:00:00Z",
+};
+
+const previousRun: RunSnapshot = {
+  contractVersion: "1.0",
+  run: {
+    id: "run-history",
+    projectId: "project-1",
+    status: "completed",
+    stage: "citation_audit",
+    progress: 100,
+    reportVersion: 1,
+    createdAt: "2026-07-23T00:00:00Z",
+    updatedAt: "2026-07-23T00:01:00Z",
+    completedAt: "2026-07-23T00:01:00Z",
+  },
+  brief: {
+    question: "旧问题：哪些耐药标志物值得关注？",
+    population: null,
+    intervention: null,
+    comparison: null,
+    outcomes: [],
+    keywords: [],
+    dateFrom: 2020,
+    dateTo: 2025,
+    studyTypes: [],
+  },
+  messages: [
+    {
+      id: "message-history-user",
+      runId: "run-history",
+      sequence: 1,
+      role: "user",
+      content: "旧问题：哪些耐药标志物值得关注？",
+      evidenceIds: [],
+      reportVersion: null,
+      createdAt: "2026-07-23T00:00:00Z",
+    },
+    {
+      id: "message-history-assistant",
+      runId: "run-history",
+      sequence: 20,
+      role: "assistant",
+      content: "已依据检索证据生成报告：旧报告摘要不应再次占满对话框。",
+      evidenceIds: [],
+      reportVersion: 1,
+      createdAt: "2026-07-23T00:01:00Z",
+    },
+  ],
+  operations: [
+    {
+      id: "operation-history",
+      runId: "run-history",
+      sequence: 2,
+      operationKind: "search_sources",
+      stage: "search_sources",
+      title: "旧运行多源检索",
+      summary: "旧运行检索轨迹。",
+      status: "completed",
+      createdAt: "2026-07-23T00:00:10Z",
+    },
+  ],
 };
 
 describe("desktop workspace", () => {
@@ -93,6 +154,57 @@ describe("desktop workspace", () => {
     expect(screen.getByTestId("workspace")).toHaveClass("desktop-workspace");
   });
 
+  it("collapses prior runs while keeping their messages and operations accessible", () => {
+    render(
+      <Workspace
+        projectName="免疫耐药"
+        run={{
+          id: "run-current",
+          projectId: "project-1",
+          status: "running",
+          stage: "search_sources",
+          progress: 22,
+          reportVersion: 0,
+          createdAt: "2026-07-24T00:00:00Z",
+          updatedAt: "2026-07-24T00:00:10Z",
+          completedAt: null,
+        }}
+        messages={[]}
+        operations={[
+          {
+            id: "operation-current",
+            runId: "run-current",
+            sequence: 1,
+            operationKind: "search_sources",
+            stage: "search_sources",
+            title: "当前运行多源检索",
+            summary: "正在检索当前问题。",
+            status: "running",
+            createdAt: "2026-07-24T00:00:00Z",
+          },
+        ]}
+        previousRuns={[previousRun]}
+        report={null}
+      />,
+    );
+
+    const historyQuestion = screen.getByText("旧问题：哪些耐药标志物值得关注？", {
+      selector: ".history-run-question",
+    });
+    const history = historyQuestion.closest("details");
+    expect(history).not.toHaveAttribute("open");
+    expect(screen.getByText("1 次运行 · 点击展开")).toBeInTheDocument();
+    expect(screen.getByText("当前运行多源检索")).toBeInTheDocument();
+    expect(screen.getByText("当前运行 · 第 2 次")).toBeInTheDocument();
+
+    fireEvent.click(historyQuestion);
+
+    expect(history).toHaveAttribute("open");
+    expect(screen.getByText("旧运行多源检索")).toBeInTheDocument();
+    expect(screen.getByText("本次报告已生成（完整内容见右侧报告）")).toBeInTheDocument();
+    expect(screen.queryByText(/旧报告摘要不应再次占满/)).not.toBeInTheDocument();
+  });
+
   it("shows the complete report, exactly three plans, and traceable evidence", () => {
     const onExport = vi.fn();
     render(
@@ -118,6 +230,8 @@ describe("desktop workspace", () => {
 
     expect(screen.getByRole("heading", { name: report.title })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
+    expect(screen.getByText("2010")).toBeInTheDocument();
+    expect(screen.getByText("早期文献建立了机制假设。")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "主题版图" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "参考文献" })).toBeInTheDocument();
     expect(screen.getAllByTestId("recommendation-card")).toHaveLength(3);
@@ -178,6 +292,7 @@ describe("desktop workspace", () => {
       />,
     );
 
+    expect(screen.getByLabelText("起始年份")).toHaveValue("2010");
     fireEvent.change(screen.getByLabelText("人群（P）"), { target: { value: "晚期 NSCLC" } });
     fireEvent.change(screen.getByLabelText("结局（O）"), { target: { value: "OS，PFS" } });
     fireEvent.change(screen.getByLabelText("关键词"), { target: { value: "PD-1, resistance" } });

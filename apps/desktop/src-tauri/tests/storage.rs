@@ -1,4 +1,4 @@
-use paperpilot_desktop::{crypto::CryptoBox, storage::LocalStore};
+use paperpilot_desktop::{contracts::ResearchBrief, crypto::CryptoBox, storage::LocalStore};
 use rusqlite::Connection;
 
 #[test]
@@ -48,4 +48,40 @@ fn project_content_is_encrypted_and_delete_cascades() {
     store.delete_project(&project.id).unwrap();
     assert!(store.list_projects().unwrap().is_empty());
     assert_eq!(store.attachment_count().unwrap(), 0);
+}
+
+#[test]
+fn latest_project_run_is_restored_from_persistent_storage() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = LocalStore::open(&directory.path().join("paperpilot.db"), [13_u8; 32]).unwrap();
+    let project = store.create_project("历史项目", "").unwrap();
+    let brief = ResearchBrief {
+        question: "需要恢复的历史研究问题".into(),
+        population: None,
+        intervention: None,
+        comparison: None,
+        outcomes: vec![],
+        keywords: vec![],
+        date_from: None,
+        date_to: None,
+        study_types: vec![],
+    };
+    let first = store.create_run(&project.id, &brief).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let second = store.create_run(&project.id, &brief).unwrap();
+
+    let restored = store.get_latest_project_run(&project.id).unwrap().unwrap();
+    assert_eq!(restored.id, second.id);
+    assert_ne!(restored.id, first.id);
+    let history = store.list_project_run_snapshots(&project.id).unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].run.id, first.id);
+    assert_eq!(history[1].run.id, second.id);
+    assert_eq!(history[0].brief, brief);
+    assert!(
+        store
+            .get_latest_project_run("missing-project")
+            .unwrap()
+            .is_none()
+    );
 }

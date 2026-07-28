@@ -14,6 +14,7 @@ aes-gcm = "0.10"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 pdfium-render = { version = "0.9.3", default-features = false, features = ["pdfium_latest", "thread_safe"] }
+quick-xml = "0.41"
 rand = "0.9"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

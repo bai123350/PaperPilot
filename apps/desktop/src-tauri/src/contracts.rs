@@ -120,6 +120,7 @@ pub struct RunOperation {
 pub struct RunSnapshot {
     pub contract_version: String,
     pub run: ResearchRun,
+    pub brief: ResearchBrief,
     pub messages: Vec<ConversationMessage>,
     pub operations: Vec<RunOperation>,
 }

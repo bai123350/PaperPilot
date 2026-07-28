@@ -47,6 +47,20 @@ impl DesktopService {
         Ok(self.engine.list_projects()?)
     }
 
+    pub fn get_latest_project_run(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<ResearchRun>, CommandError> {
+        Ok(self.engine.get_latest_project_run(project_id)?)
+    }
+
+    pub fn list_project_run_snapshots(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<RunSnapshot>, CommandError> {
+        Ok(self.engine.list_project_run_snapshots(project_id)?)
+    }
+
     pub fn start_run(
         &self,
         project_id: &str,
@@ -119,6 +133,14 @@ impl DesktopService {
 
     pub fn fail_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
         Ok(self.engine.fail_run(run_id)?)
+    }
+
+    pub fn fail_run_with_reason(
+        &self,
+        run_id: &str,
+        summary: &str,
+    ) -> Result<ResearchRun, CommandError> {
+        Ok(self.engine.fail_run_with_reason(run_id, summary)?)
     }
 
     pub fn cancel_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {

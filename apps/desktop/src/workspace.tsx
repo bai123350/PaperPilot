@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   CheckCircle2,
@@ -22,6 +22,7 @@ import type {
   ResearchBrief,
   ResearchRun,
   RunOperation,
+  RunSnapshot,
 } from "./generated/contracts";
 import "./workspace.css";
 
@@ -39,6 +40,10 @@ interface WorkspaceProps {
   failureReason?: string | null;
   onRetry?: () => Promise<void> | void;
   onOpenSettings?: () => void;
+  rerunDraft?: ResearchBrief | null;
+  onPrepareRerun?: () => void;
+  onCancelRerun?: () => void;
+  previousRuns?: RunSnapshot[];
 }
 
 type TimelineEntry =
@@ -59,6 +64,10 @@ export function Workspace({
   failureReason,
   onRetry,
   onOpenSettings,
+  rerunDraft = null,
+  onPrepareRerun,
+  onCancelRerun,
+  previousRuns = [],
 }: WorkspaceProps) {
   const [content, setContent] = useState("");
   const [evidence, setEvidence] = useState<EvidenceRecord | null>(null);
@@ -67,23 +76,33 @@ export function Workspace({
   const [comparison, setComparison] = useState("");
   const [outcomes, setOutcomes] = useState("");
   const [keywords, setKeywords] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
+  const [dateFrom, setDateFrom] = useState("2010");
   const [dateTo, setDateTo] = useState("");
   const [studyTypes, setStudyTypes] = useState("");
   const [briefError, setBriefError] = useState<string | null>(null);
+  const timelineEnd = useRef<HTMLDivElement>(null);
   const canCompose = !run || run.status === "completed";
-  const timeline = useMemo<TimelineEntry[]>(
-    () =>
-      [
-        ...messages.map(
-          (value): TimelineEntry => ({ kind: "message", sequence: value.sequence, value }),
-        ),
-        ...operations.map(
-          (value): TimelineEntry => ({ kind: "operation", sequence: value.sequence, value }),
-        ),
-      ].sort((left, right) => left.sequence - right.sequence),
+  const currentTimeline = useMemo<TimelineEntry[]>(
+    () => createTimeline(messages, operations),
     [messages, operations],
   );
+  const hasTimeline = previousRuns.length > 0 || currentTimeline.length > 0;
+  useEffect(() => {
+    timelineEnd.current?.scrollIntoView?.({ block: "end", behavior: "smooth" });
+  }, [currentTimeline, previousRuns.length, rerunDraft]);
+  useEffect(() => {
+    if (!rerunDraft) return;
+    setContent(rerunDraft.question);
+    setPopulation(rerunDraft.population ?? "");
+    setIntervention(rerunDraft.intervention ?? "");
+    setComparison(rerunDraft.comparison ?? "");
+    setOutcomes(rerunDraft.outcomes.join(", "));
+    setKeywords(rerunDraft.keywords.join(", "));
+    setDateFrom(rerunDraft.dateFrom?.toString() ?? "2010");
+    setDateTo(rerunDraft.dateTo?.toString() ?? "");
+    setStudyTypes(rerunDraft.studyTypes.join(", "));
+    setBriefError(null);
+  }, [rerunDraft]);
 
   async function submit() {
     const value = content.trim();
@@ -133,59 +152,82 @@ export function Workspace({
             <span className="pane-kicker">{projectName}</span>
             <h2 id="conversation-title">研究对话</h2>
           </div>
-          <span className={`run-status status-${run?.status ?? "ready"}`}>
-            {run ? `${run.status === "completed" ? "报告" : "运行"} ${run.progress}%` : "准备开始"}
-          </span>
+          <div className="pane-header-actions">
+            {run?.status === "completed" && onPrepareRerun ? (
+              <button className="rerun-button" type="button" onClick={onPrepareRerun}>
+                <RotateCcw size={14} aria-hidden="true" />重新运行
+              </button>
+            ) : null}
+            {rerunDraft && onCancelRerun ? (
+              <button className="rerun-button rerun-cancel" type="button" onClick={onCancelRerun}>
+                取消重跑
+              </button>
+            ) : null}
+            <span className={`run-status status-${run?.status ?? "ready"}`}>
+              {rerunDraft
+                ? "修改参数"
+                : run
+                  ? `${run.status === "completed" ? "报告" : "运行"} ${run.progress}%`
+                  : "准备开始"}
+            </span>
+          </div>
         </header>
 
         <div className="conversation-timeline" aria-live="polite">
-          {!timeline.length ? (
-            <div className="conversation-empty">
-              <Bot size={24} aria-hidden="true" />
-              <strong>从研究问题开始</strong>
-              <p>输入问题后，PaperPilot 会持续返回检索、证据抽取和综合结果。</p>
+          {rerunDraft ? (
+            <div className="rerun-notice">
+              <RotateCcw size={15} aria-hidden="true" />
+              <div>
+                <strong>修改后重新运行</strong>
+                <p>下面保留此前全部记录；修改预填参数并提交后，将新增一次运行。</p>
+              </div>
             </div>
           ) : null}
-          {timeline.map((entry) =>
-            entry.kind === "operation" ? (
-              <article className={`operation operation-${entry.value.status}`} key={entry.value.id}>
-                <span className="operation-icon">
-                  {entry.value.status === "completed" ? (
-                    <CheckCircle2 size={16} aria-hidden="true" />
-                  ) : (
-                    <Clock3 size={16} aria-hidden="true" />
-                  )}
-                </span>
-                <div>
-                  <strong>{entry.value.title}</strong>
-                  <p>{entry.value.summary}</p>
-                </div>
-              </article>
-            ) : (
-              <article className={`message message-${entry.value.role}`} key={entry.value.id}>
-                <span className="message-avatar">
-                  {entry.value.role === "user" ? (
-                    <UserRound size={15} aria-hidden="true" />
-                  ) : (
-                    <Bot size={15} aria-hidden="true" />
-                  )}
-                </span>
-                <div>
-                  <strong>{entry.value.role === "user" ? "你" : "PaperPilot"}</strong>
-                  <p>{entry.value.content}</p>
-                  {entry.value.evidenceIds.length ? (
-                    <button
-                      className="evidence-link"
-                      type="button"
-                      onClick={() => showEvidence(entry.value.evidenceIds)}
-                    >
-                      查看 {entry.value.evidenceIds.length} 条证据
-                    </button>
-                  ) : null}
-                </div>
-              </article>
-            ),
-          )}
+          {!hasTimeline ? (
+            <div className="conversation-empty">
+              <Bot size={24} aria-hidden="true" />
+              <strong>{rerunDraft ? "修改后重新运行" : "从研究问题开始"}</strong>
+              <p>
+                {rerunDraft
+                  ? "原研究问题和参数已预填。修改有误的条件后提交，将重新检索并生成一份新报告。"
+                  : "输入问题后，PaperPilot 会持续返回检索、证据抽取和综合结果。"}
+              </p>
+            </div>
+          ) : null}
+          {previousRuns.length ? (
+            <section className="run-history" aria-label="历史运行">
+              <header className="run-history-header">
+                <strong>历史记录</strong>
+                <span>{previousRuns.length} 次运行 · 点击展开</span>
+              </header>
+              {previousRuns.map((snapshot, index) => (
+                <details className="history-run" key={snapshot.run.id}>
+                  <summary>
+                    <span className="history-run-index">第 {index + 1} 次</span>
+                    <span className="history-run-question">{snapshot.brief.question}</span>
+                    <span className="history-run-counts">
+                      {snapshot.messages.length} 条对话 · {snapshot.operations.length} 个步骤
+                    </span>
+                    <time>{new Date(snapshot.run.createdAt).toLocaleString("zh-CN")}</time>
+                  </summary>
+                  <div className="history-run-content">
+                    <TimelineItems
+                      entries={createTimeline(snapshot.messages, snapshot.operations)}
+                      onEvidence={showEvidence}
+                    />
+                  </div>
+                </details>
+              ))}
+            </section>
+          ) : null}
+          {run && previousRuns.length ? (
+            <div className="run-divider current-run-divider">
+              <span>当前运行 · 第 {previousRuns.length + 1} 次</span>
+              <time>{new Date(run.createdAt).toLocaleString("zh-CN")}</time>
+            </div>
+          ) : null}
+          <TimelineItems entries={currentTimeline} onEvidence={showEvidence} />
+          <div className="timeline-end" ref={timelineEnd} aria-hidden="true" />
         </div>
 
         <details className="research-options">
@@ -197,8 +239,8 @@ export function Workspace({
             <label>结局（O）<input value={outcomes} onChange={(event) => setOutcomes(event.target.value)} placeholder="以逗号分隔" /></label>
             <label>关键词<input value={keywords} onChange={(event) => setKeywords(event.target.value)} placeholder="以逗号分隔" /></label>
             <label>研究类型<input value={studyTypes} onChange={(event) => setStudyTypes(event.target.value)} placeholder="队列、RCT…" /></label>
-            <label>起始年份<input inputMode="numeric" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} placeholder="2020" /></label>
-            <label>结束年份<input inputMode="numeric" value={dateTo} onChange={(event) => setDateTo(event.target.value)} placeholder="2026" /></label>
+            <label>起始年份<input inputMode="numeric" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} placeholder="2010" /></label>
+            <label>结束年份<input inputMode="numeric" value={dateTo} onChange={(event) => setDateTo(event.target.value)} placeholder="留空表示最新" /></label>
           </div>
           <label className="pdf-drop">拖入文本型 PDF，或点击选择文件<input type="file" accept=".pdf,application/pdf" /></label>
           {briefError ? <p className="brief-error" role="alert">{briefError}</p> : null}
@@ -217,6 +259,8 @@ export function Workspace({
             placeholder={
               run?.status === "completed"
                 ? "追问证据或描述新的研究约束…"
+                : rerunDraft
+                  ? "修改研究问题后重新运行…"
                 : run
                   ? "研究运行中，完成后可继续追问…"
                   : "输入研究问题…"
@@ -264,6 +308,82 @@ export function Workspace({
   );
 }
 
+function createTimeline(
+  messages: ConversationMessage[],
+  operations: RunOperation[],
+): TimelineEntry[] {
+  return [
+    ...messages.map(
+      (value): TimelineEntry => ({ kind: "message", sequence: value.sequence, value }),
+    ),
+    ...operations.map(
+      (value): TimelineEntry => ({ kind: "operation", sequence: value.sequence, value }),
+    ),
+  ].sort((left, right) => left.sequence - right.sequence);
+}
+
+function TimelineItems({
+  entries,
+  onEvidence,
+}: {
+  entries: TimelineEntry[];
+  onEvidence: (ids: string[]) => void;
+}) {
+  return entries.map((entry) =>
+    entry.kind === "operation" ? (
+      <article className={`operation operation-${entry.value.status}`} key={entry.value.id}>
+        <span className="operation-icon">
+          {entry.value.status === "completed" ? (
+            <CheckCircle2 size={16} aria-hidden="true" />
+          ) : (
+            <Clock3 size={16} aria-hidden="true" />
+          )}
+        </span>
+        <div>
+          <header>
+            <strong>{entry.value.title}</strong>
+            <span>{entry.value.status === "completed" ? "完成" : "执行中"}</span>
+          </header>
+          <p>{entry.value.summary}</p>
+        </div>
+      </article>
+    ) : (
+      <article className={`message message-${entry.value.role}`} key={entry.value.id}>
+        <span className="message-avatar">
+          {entry.value.role === "user" ? (
+            <UserRound size={15} aria-hidden="true" />
+          ) : (
+            <Bot size={15} aria-hidden="true" />
+          )}
+        </span>
+        <div>
+          <strong>{entry.value.role === "user" ? "你" : "PaperPilot"}</strong>
+          <p>{formatMessageContent(entry.value)}</p>
+          {entry.value.evidenceIds.length ? (
+            <button
+              className="evidence-link"
+              type="button"
+              onClick={() => onEvidence(entry.value.evidenceIds)}
+            >
+              查看 {entry.value.evidenceIds.length} 条证据
+            </button>
+          ) : null}
+        </div>
+      </article>
+    ),
+  );
+}
+
+function formatMessageContent(message: ConversationMessage): string {
+  if (
+    message.role === "assistant" &&
+    /^已依据检索证据生成报告[：:]/.test(message.content.trimStart())
+  ) {
+    return "本次报告已生成（完整内容见右侧报告）";
+  }
+  return message.content;
+}
+
 function ReportDocument({
   report,
   updating,
@@ -289,7 +409,17 @@ function ReportDocument({
       </header>
       <p className="report-summary">{report.summary}</p>
       <ReportSection title="进展时间线">
-        <ul>{report.timeline.map((item) => <li key={item}>{item}</li>)}</ul>
+        <ol className="report-timeline">
+          {report.timeline.map((item, index) => {
+            const parsed = item.match(/^((?:19|20)\d{2}(?:[–—-](?:19|20)\d{2})?)[：:]\s*(.*)$/);
+            return (
+              <li key={`${index}-${item}`}>
+                <time>{parsed?.[1] ?? "阶段"}</time>
+                <p>{parsed?.[2] ?? item}</p>
+              </li>
+            );
+          })}
+        </ol>
       </ReportSection>
       <ReportSection title="主题版图">
         <ul>{report.themes.map((item) => <li key={item}>{item}</li>)}</ul>

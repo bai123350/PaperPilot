@@ -51,6 +51,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             tauri_api::create_project,
             tauri_api::list_projects,
+            tauri_api::get_latest_project_run,
+            tauri_api::list_project_run_snapshots,
             tauri_api::get_model_settings,
             tauri_api::save_model_settings,
             tauri_api::start_run,
