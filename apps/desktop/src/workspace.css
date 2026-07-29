@@ -34,10 +34,12 @@ button { cursor: pointer; }
 .operation-icon { position: relative; z-index: 1; width: 24px; height: 24px; display: grid; place-items: center; color: #176b52; background: #f8faf8; border: 1px solid #b9cfc4; border-radius: 50%; }
 .operation-running .operation-icon { color: #527064; }
 .operation-running .operation-icon svg { animation: operation-spin 1.1s linear infinite; }
+.operation-failed .operation-icon { color: #a53b3b; background: #fff4f4; border-color: #e2bcbc; }
 .operation header { min-height: 24px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .operation strong { color: #2d3b34; font-size: 12px; }
 .operation header span { color: #7b8981; font-size: 9px; font-weight: 750; }
 .operation-running header span { color: #176b52; }
+.operation-failed header span { color: #a53b3b; }
 .operation p { margin: 3px 0 0; color: #5f6d65; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
 .timeline-end { height: 1px; }
 .run-divider { display: flex; align-items: center; gap: 9px; margin: 5px 0 16px; color: #728078; font-size: 9px; font-weight: 750; }
@@ -48,6 +50,7 @@ button { cursor: pointer; }
 .run-history-header strong { color: #35453c; font-size: 11px; }
 .run-history-header span { white-space: nowrap; }
 .history-run { overflow: hidden; background: #fff; border: 1px solid #d8dfdb; border-radius: 5px; }
+.history-run[data-selected] { border-color: #68a28e; box-shadow: 0 0 0 1px rgba(23,128,96,.12); }
 .history-run + .history-run { margin-top: 6px; }
 .history-run summary { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 4px 8px; align-items: center; padding: 9px 10px; color: #526159; cursor: pointer; list-style-position: inside; }
 .history-run summary::marker { color: #176b52; }
@@ -59,7 +62,8 @@ button { cursor: pointer; }
 .history-run-content { padding: 13px 11px 1px; }
 .history-run-content .message { max-width: 100%; }
 .history-run-content .operation { padding-bottom: 13px; }
-.current-run-divider { margin-top: 3px; }
+.current-run-divider { width: 100%; margin-top: 3px; padding: 0; background: transparent; border: 0; cursor: pointer; }
+.current-run-divider[data-selected] { color: #176b52; }
 .rerun-notice { display: grid; grid-template-columns: 22px 1fr; gap: 8px; margin-bottom: 16px; padding: 10px 11px; color: #315346; background: #edf5f1; border: 1px solid #c8dacf; border-radius: 5px; }
 .rerun-notice > svg { margin-top: 1px; }
 .rerun-notice strong { font-size: 11px; }
@@ -98,9 +102,14 @@ button { cursor: pointer; }
 .report-timeline li { position: relative; display: grid; grid-template-columns: 88px minmax(0,1fr); gap: 18px; min-height: 48px; padding: 8px 0 14px; }
 .report-timeline li::before { position: absolute; z-index: 1; top: 14px; left: 39px; width: 9px; height: 9px; content: ""; background: #fff; border: 2px solid #178060; border-radius: 50%; }
 .report-timeline time { color: #176b52; font-size: 12px; font-weight: 800; }
+.timeline-studies { display: grid; gap: 8px; min-width: 0; }
 .report-timeline p { margin: 0; color: #4f5d55; line-height: 1.65; }
 .claim { display: grid; grid-template-columns: 22px 1fr; gap: 10px; padding: 13px 0; border-top: 1px solid #e2e6e3; }.claim > svg { color: #176b52; margin-top: 2px; }.claim p { margin: 0 0 7px; line-height: 1.6; }
 .evidence-link { padding: 0; color: #176b52; background: transparent; border: 0; font-size: 11px; font-weight: 750; }
+.inline-evidence-link, .paper-id-link { color: #1268b3; font-weight: 750; text-decoration: none; }
+.inline-evidence-link { display: inline; margin: 0 2px; padding: 1px 5px; background: #eaf4ff; border: 1px solid #b9d9f5; border-radius: 4px; font: inherit; line-height: 1.35; cursor: pointer; }
+.inline-evidence-link:hover, .paper-id-link:hover { color: #084d8a; text-decoration: underline; }
+.inline-evidence-link:focus-visible, .paper-id-link:focus-visible { outline: 2px solid #2584cf; outline-offset: 2px; }
 .report-section ul { padding-left: 20px; line-height: 1.7; }
 .recommendation-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
 .recommendation-card { position: relative; min-height: 390px; display: flex; flex-direction: column; padding: 17px; border: 1px solid #d9e0dc; border-radius: 7px; background: #fff; }

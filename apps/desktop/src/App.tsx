@@ -45,10 +45,14 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
   const [loadingProject, setLoadingProject] = useState(false);
   const [rerunDraft, setRerunDraft] = useState<ResearchBrief | null>(null);
   const [runHistory, setRunHistory] = useState<RunSnapshot[]>([]);
+  const [selectedReportRunId, setSelectedReportRunId] = useState<string | null>(null);
+  const [historicalReport, setHistoricalReport] = useState<Report | null>(null);
+  const [historicalReportLoading, setHistoricalReportLoading] = useState(false);
   const latestRunEvent = useRef<
     Record<string, { sequence: number; signature: string }>
   >({});
   const projectLoadSequence = useRef(0);
+  const reportLoadSequence = useRef(0);
 
   useEffect(() => {
     bridge.listProjects().then(setProjects).catch(showError);
@@ -112,6 +116,7 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
     setReport(null);
     setRerunDraft(null);
     setRunHistory([]);
+    showCurrentReport();
     setRunFailure(null);
     setError(null);
     setLoadingProject(true);
@@ -169,6 +174,7 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
 
   async function startResearch(brief: ResearchBrief) {
     if (!selected) return;
+    showCurrentReport();
     setPending(true);
     setError(null);
     setRunFailure(null);
@@ -201,17 +207,20 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
 
   function prepareRerun() {
     if (!snapshot || snapshot.run.status !== "completed") return;
+    showCurrentReport();
     setError(null);
     setRunFailure(null);
     setRerunDraft(snapshot.brief);
   }
 
   async function exportReport(format: ExportFormat) {
-    if (!snapshot || !report) return;
+    const activeReport = selectedReportRunId ? historicalReport : report;
+    const activeRunId = selectedReportRunId ?? snapshot?.run.id;
+    if (!activeRunId || !activeReport) return;
     setPending(true);
     setError(null);
     try {
-      const exported = await bridge.exportReport(snapshot.run.id, format);
+      const exported = await bridge.exportReport(activeRunId, format);
       if (format === "print_html") {
         const printWindow = window.open("", "_blank");
         if (!printWindow) throw new Error("无法打开打印窗口，请允许 PaperPilot 打开新窗口。");
@@ -254,6 +263,45 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
       showError(reason);
     } finally {
       setPending(false);
+    }
+  }
+
+  function showCurrentReport() {
+    reportLoadSequence.current += 1;
+    setSelectedReportRunId(null);
+    setHistoricalReport(null);
+    setHistoricalReportLoading(false);
+  }
+
+  async function selectRunReport(runId: string | null) {
+    if (!runId || runId === snapshot?.run.id) {
+      showCurrentReport();
+      return;
+    }
+    const selectedSnapshot = runHistory.find((item) => item.run.id === runId);
+    if (!selectedSnapshot || selectedSnapshot.run.status !== "completed") {
+      setError("该次运行未生成完整报告。");
+      return;
+    }
+    const sequence = reportLoadSequence.current + 1;
+    reportLoadSequence.current = sequence;
+    setSelectedReportRunId(runId);
+    setHistoricalReport(null);
+    setHistoricalReportLoading(true);
+    setError(null);
+    try {
+      const nextReport = await bridge.getReport(runId);
+      if (reportLoadSequence.current !== sequence) return;
+      setHistoricalReport(nextReport);
+    } catch (reason) {
+      if (reportLoadSequence.current !== sequence) return;
+      setSelectedReportRunId(null);
+      setHistoricalReport(null);
+      showError(reason);
+    } finally {
+      if (reportLoadSequence.current === sequence) {
+        setHistoricalReportLoading(false);
+      }
     }
   }
 
@@ -310,6 +358,7 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
         setReport(null);
         setRerunDraft(null);
         setRunHistory([]);
+        showCurrentReport();
       }
     } catch (reason) {
       showError(reason);
@@ -348,7 +397,7 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
     return (
       <div className="desktop-shell">
         <header className="desktop-titlebar">
-          <button type="button" onClick={() => { projectLoadSequence.current += 1; setSelected(null); setSnapshot(null); setReport(null); setRunFailure(null); setRerunDraft(null); setRunHistory([]); setLoadingProject(false); }}>
+          <button type="button" onClick={() => { projectLoadSequence.current += 1; setSelected(null); setSnapshot(null); setReport(null); setRunFailure(null); setRerunDraft(null); setRunHistory([]); showCurrentReport(); setLoadingProject(false); }}>
             <ArrowLeft size={16} />项目
           </button>
           <strong>{selected.name}</strong>
@@ -375,7 +424,16 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
                 ? runHistory
                 : runHistory.filter((item) => item.run.id !== snapshot?.run.id)
             }
-            report={rerunDraft ? null : report}
+            report={
+              rerunDraft
+                ? null
+                : selectedReportRunId
+                  ? historicalReport
+                  : report
+            }
+            selectedRunId={selectedReportRunId}
+            reportLoading={historicalReportLoading}
+            onSelectRun={selectRunReport}
             pending={pending}
             onStart={startResearch}
             onSend={sendMessage}

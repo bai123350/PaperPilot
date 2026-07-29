@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import type { DesktopBridge } from "./bridge";
-import type { RunEvent } from "./generated/contracts";
+import type { Report, RunEvent, RunSnapshot } from "./generated/contracts";
 
 const rerunBrief = {
   question: "比较肝癌巨噬细胞研究进展",
@@ -469,5 +469,106 @@ describe("desktop app shell", () => {
       }),
     );
     expect(bridge.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("loads a selected historical run report and can return to the current report", async () => {
+    const project = {
+      id: "project-history-switch",
+      name: "多次运行项目",
+      description: "",
+      createdAt: "2026-07-27T00:00:00Z",
+      updatedAt: "2026-07-29T00:00:00Z",
+    };
+    const oldRun = {
+      id: "run-old",
+      projectId: project.id,
+      status: "completed" as const,
+      stage: "citation_audit",
+      progress: 100,
+      reportVersion: 1,
+      createdAt: "2026-07-27T00:00:00Z",
+      updatedAt: "2026-07-27T00:10:00Z",
+      completedAt: "2026-07-27T00:10:00Z",
+    };
+    const currentRun = {
+      ...oldRun,
+      id: "run-current",
+      createdAt: "2026-07-29T00:00:00Z",
+      updatedAt: "2026-07-29T00:10:00Z",
+      completedAt: "2026-07-29T00:10:00Z",
+    };
+    const snapshots: RunSnapshot[] = [
+      {
+        contractVersion: "1.0",
+        run: oldRun,
+        brief: { ...rerunBrief, question: "第一次运行的问题" },
+        messages: [],
+        operations: [],
+      },
+      {
+        contractVersion: "1.0",
+        run: currentRun,
+        brief: { ...rerunBrief, question: "当前运行的问题" },
+        messages: [],
+        operations: [],
+      },
+    ];
+    const reportFor = (runId: string, title: string): Report => ({
+      contractVersion: "1.0",
+      schemaVersion: "1.0",
+      runId,
+      version: 1,
+      title,
+      summary: `${title}摘要`,
+      timeline: [],
+      themes: [],
+      claims: [],
+      controversies: [],
+      limitations: [],
+      gaps: [],
+      recommendations: [],
+      evidence: [],
+      references: [],
+      disclaimer: "仅供科研用途",
+      createdAt: "2026-07-29T00:10:00Z",
+    });
+    const bridge: DesktopBridge = {
+      listProjects: vi.fn().mockResolvedValue([project]),
+      getLatestProjectRun: vi.fn().mockResolvedValue(currentRun),
+      listProjectRunSnapshots: vi.fn().mockResolvedValue(snapshots),
+      getModelSettings: vi.fn().mockResolvedValue(null),
+      saveModelSettings: vi.fn(),
+      createProject: vi.fn(),
+      startRun: vi.fn(),
+      retryRun: vi.fn(),
+      getRunSnapshot: vi.fn(),
+      getReport: vi.fn().mockImplementation((runId: string) =>
+        Promise.resolve(
+          runId === oldRun.id
+            ? reportFor(oldRun.id, "第一次运行报告")
+            : reportFor(currentRun.id, "当前运行报告"),
+        )),
+      exportReport: vi.fn(),
+      sendMessage: vi.fn(),
+      deleteProject: vi.fn(),
+      listenRunEvents: vi.fn().mockResolvedValue(() => {}),
+    };
+    render(<App bridge={bridge} />);
+
+    fireEvent.click((await screen.findByText(project.name)).closest("button")!);
+    expect(
+      await screen.findByRole("heading", { name: "当前运行报告" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("第一次运行的问题"));
+    expect(
+      await screen.findByRole("heading", { name: "第一次运行报告" }),
+    ).toBeInTheDocument();
+    expect(bridge.getReport).toHaveBeenCalledWith(oldRun.id);
+
+    fireEvent.click(screen.getByRole("button", { name: /当前运行 · 第 2 次/ }));
+    expect(
+      await screen.findByRole("heading", { name: "当前运行报告" }),
+    ).toBeInTheDocument();
   });
 });

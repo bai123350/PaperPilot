@@ -164,6 +164,17 @@ impl ResearchEngine {
         summary: &str,
     ) -> Result<ResearchRun, PipelineError> {
         let failed = self.fail_run(run_id)?;
+        if let Some(mut operation) = self
+            .store
+            .list_operations(run_id)?
+            .into_iter()
+            .rev()
+            .find(|operation| operation.status == "running")
+        {
+            operation.status = "failed".into();
+            operation.summary = summary.into();
+            self.store.save_operation(&operation)?;
+        }
         let sequence = self.store.next_timeline_sequence(run_id)?;
         self.store.save_message(&ConversationMessage {
             id: Uuid::new_v4().to_string(),
@@ -354,6 +365,30 @@ impl ResearchEngine {
                         "running",
                     )]
                 }
+                LiveResearchTrace::ManualSourceSearchAvailable { source, url } => {
+                    let detail =
+                        format!("{source}：已生成手动补充检索入口（官方未提供自动检索 API）：{url}");
+                    if let Some(item) = source_progress
+                        .iter_mut()
+                        .find(|(name, _)| name == &source)
+                    {
+                        item.1 = detail;
+                    } else {
+                        source_progress.push((source, detail));
+                    }
+                    vec![(
+                        1,
+                        format!(
+                            "正在逐源检索真实文献：\n{}",
+                            source_progress
+                                .iter()
+                                .map(|(_, detail)| detail.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        ),
+                        "running",
+                    )]
+                }
                 LiveResearchTrace::SourcesRetrieved {
                     source,
                     matched_count,
@@ -363,8 +398,9 @@ impl ResearchEngine {
                     unique_count,
                     reached_limit,
                 } => {
+                    let match_summary = format!("摘要关键词匹配 {matched_count} 篇");
                     let detail = format!(
-                        "{source}：按相关性排序读取 {batch_count} 批，累计 {returned_count} 篇；匹配总数 {matched_count} 篇，可用摘要 {usable_count} 篇，源内唯一 {unique_count} 篇{}",
+                        "{source}：按相关性排序读取 {batch_count} 批，累计 {returned_count} 篇；{match_summary}，可用摘要 {usable_count} 篇，源内唯一 {unique_count} 篇{}",
                         if reached_limit {
                             "（已达到本次深度检索上限）"
                         } else {
@@ -435,7 +471,7 @@ impl ResearchEngine {
                     (
                         2,
                         format!(
-                            "四库共收集 {collected_count} 条记录；按 PMID、PMCID、DOI 和规范化标题合并为 {unique_count} 篇，进入评分候选 {candidate_count} 篇。"
+                            "四个自动来源共收集 {collected_count} 条记录；按 PMID、PMCID、DOI 和规范化标题合并为 {unique_count} 篇，进入评分候选 {candidate_count} 篇；Google Scholar 提供手动补充核验入口。"
                         ),
                         "completed",
                     ),

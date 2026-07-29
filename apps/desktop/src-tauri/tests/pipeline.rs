@@ -252,7 +252,7 @@ impl LiveResearchBackend for FakeLiveBackend {
         });
         on_trace(LiveResearchTrace::SourcesRetrieved {
             source: "Europe PMC".into(),
-            matched_count: 126,
+            matched_count: 8,
             batch_count: 2,
             returned_count: 12,
             usable_count: 8,
@@ -264,7 +264,7 @@ impl LiveResearchBackend for FakeLiveBackend {
         });
         on_trace(LiveResearchTrace::SourcesRetrieved {
             source: "PubMed".into(),
-            matched_count: 91,
+            matched_count: 6,
             batch_count: 2,
             returned_count: 10,
             usable_count: 6,
@@ -289,6 +289,10 @@ impl LiveResearchBackend for FakeLiveBackend {
         on_trace(LiveResearchTrace::SourceRetrievalFailed {
             source: "Crossref".into(),
             reason: "测试网络超时".into(),
+        });
+        on_trace(LiveResearchTrace::ManualSourceSearchAvailable {
+            source: "Google Scholar".into(),
+            url: "https://scholar.google.com/scholar?q=PD-1".into(),
         });
         on_trace(LiveResearchTrace::SourcesMerged {
             collected_count: 18,
@@ -428,12 +432,28 @@ fn live_pipeline_uses_the_configured_backend_for_report_and_follow_up() {
     assert!(
         snapshot.operations[1]
             .summary
+            .contains("摘要关键词匹配 6 篇")
+    );
+    assert!(
+        snapshot.operations[1]
+            .summary
             .contains("OpenAlex：按相关性排序读取 2 批")
     );
     assert!(
         snapshot.operations[1]
             .summary
+            .contains("摘要关键词匹配 73 篇")
+    );
+    assert!(!snapshot.operations[1].summary.contains("候选总数"));
+    assert!(
+        snapshot.operations[1]
+            .summary
             .contains("Crossref：检索失败（测试网络超时）")
+    );
+    assert!(
+        snapshot.operations[1]
+            .summary
+            .contains("Google Scholar：已生成手动补充检索入口")
     );
     assert!(snapshot.operations[2].summary.contains("合并为 14 篇"));
     assert!(snapshot.operations[3].summary.contains("≥7 分的有 3 篇"));

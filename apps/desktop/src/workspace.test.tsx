@@ -1,8 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Report, RunSnapshot } from "./generated/contracts";
-import { Workspace } from "./workspace";
+import { Workspace, paperIdentifierUrl, splitTimelineStudies } from "./workspace";
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(),
+}));
 
 const report: Report = {
   contractVersion: "1.0",
@@ -51,6 +56,31 @@ const report: Report = {
   disclaimer: "本报告仅供科研用途。",
   createdAt: "2026-07-24T00:00:00Z",
 };
+
+describe("splitTimelineStudies", () => {
+  it("puts semicolon- and newline-separated papers on individual lines", () => {
+    expect(
+      splitTimelineStudies(
+        "研究甲取得进展（evidence-1）；研究乙完成验证（evidence-2）\n研究丙补充机制（evidence-3）。",
+      ),
+    ).toEqual([
+      "研究甲取得进展（evidence-1）",
+      "研究乙完成验证（evidence-2）",
+      "研究丙补充机制（evidence-3）。",
+    ]);
+  });
+});
+
+describe("paperIdentifierUrl", () => {
+  it("links supported literature identifiers to authoritative pages", () => {
+    expect(paperIdentifierUrl("pmid:42004959")).toBe(
+      "https://pubmed.ncbi.nlm.nih.gov/42004959/",
+    );
+    expect(paperIdentifierUrl("doi:10.1000/example")).toBe(
+      "https://doi.org/10.1000/example",
+    );
+  });
+});
 
 const previousRun: RunSnapshot = {
   contractVersion: "1.0",
@@ -138,7 +168,8 @@ describe("desktop workspace", () => {
             operationKind: "search_sources",
             stage: "search_sources",
             title: "多源检索",
-            summary: "已检索真实文献来源。",
+            summary:
+              "已检索真实文献来源。\nGoogle Scholar：https://scholar.google.com/scholar?q=single%20cell",
             status: "completed",
             createdAt: "2026-07-24T00:00:00Z",
           },
@@ -149,12 +180,22 @@ describe("desktop workspace", () => {
 
     expect(screen.getByRole("heading", { name: "研究对话" })).toBeInTheDocument();
     expect(screen.getByText("多源检索")).toBeInTheDocument();
+    const scholarLink = screen.getByRole("link", { name: "打开 Google Scholar" });
+    expect(scholarLink).toHaveAttribute(
+      "href",
+      "https://scholar.google.com/scholar?q=single%20cell",
+    );
+    fireEvent.click(scholarLink);
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://scholar.google.com/scholar?q=single%20cell",
+    );
     expect(screen.getByRole("heading", { name: "报告生成中" })).toBeInTheDocument();
     expect(screen.getByLabelText("继续研究对话")).toBeDisabled();
     expect(screen.getByTestId("workspace")).toHaveClass("desktop-workspace");
   });
 
   it("collapses prior runs while keeping their messages and operations accessible", () => {
+    const onSelectRun = vi.fn();
     render(
       <Workspace
         projectName="免疫耐药"
@@ -184,6 +225,7 @@ describe("desktop workspace", () => {
           },
         ]}
         previousRuns={[previousRun]}
+        onSelectRun={onSelectRun}
         report={null}
       />,
     );
@@ -200,14 +242,18 @@ describe("desktop workspace", () => {
     fireEvent.click(historyQuestion);
 
     expect(history).toHaveAttribute("open");
+    expect(onSelectRun).toHaveBeenCalledWith("run-history");
     expect(screen.getByText("旧运行多源检索")).toBeInTheDocument();
     expect(screen.getByText("本次报告已生成（完整内容见右侧报告）")).toBeInTheDocument();
     expect(screen.queryByText(/旧报告摘要不应再次占满/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /当前运行 · 第 2 次/ }));
+    expect(onSelectRun).toHaveBeenCalledWith(null);
   });
 
   it("shows the complete report, exactly three plans, and traceable evidence", () => {
     const onExport = vi.fn();
-    render(
+    const { container } = render(
       <Workspace
         projectName="免疫耐药"
         run={{
@@ -223,7 +269,14 @@ describe("desktop workspace", () => {
         }}
         messages={[]}
         operations={[]}
-        report={report}
+        report={{
+          ...report,
+          timeline: [
+            "2010：早期文献建立了机制假设（evidence-1）；独立研究完成验证（evidence-2）。",
+            "2026：最新研究完成多模态验证。",
+          ],
+          references: ["Evidence paper (pmid:1)"],
+        }}
         onExport={onExport}
       />,
     );
@@ -231,7 +284,21 @@ describe("desktop workspace", () => {
     expect(screen.getByRole("heading", { name: report.title })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
     expect(screen.getByText("2010")).toBeInTheDocument();
-    expect(screen.getByText("早期文献建立了机制假设。")).toBeInTheDocument();
+    expect(screen.getByText("早期文献建立了机制假设", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("独立研究完成验证（", { exact: false })).toBeInTheDocument();
+    expect(screen.getByText("evidence-2")).toBeInTheDocument();
+    expect(container.querySelectorAll(".report-timeline li:first-child .timeline-studies p")).toHaveLength(2);
+    const inlineEvidence = screen.getByRole("button", { name: "打开证据 evidence-1" });
+    expect(inlineEvidence).toHaveClass("inline-evidence-link");
+    const pmidLink = screen.getByRole("link", { name: "pmid:1" });
+    expect(pmidLink).toHaveAttribute(
+      "href",
+      "https://pubmed.ncbi.nlm.nih.gov/1/",
+    );
+    fireEvent.click(pmidLink);
+    expect(openUrl).toHaveBeenCalledWith("https://pubmed.ncbi.nlm.nih.gov/1/");
+    fireEvent.click(inlineEvidence);
+    expect(screen.getByLabelText("证据详情")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "主题版图" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "参考文献" })).toBeInTheDocument();
     expect(screen.getAllByTestId("recommendation-card")).toHaveLength(3);
