@@ -159,6 +159,12 @@ pub struct EvidenceRecord {
     pub paper_id: String,
     pub paper_title: String,
     #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub genes: Vec<String>,
+    #[serde(default)]
+    pub findings: Vec<String>,
+    #[serde(default)]
     pub journal: Option<String>,
     #[serde(default)]
     pub issn: Option<String>,

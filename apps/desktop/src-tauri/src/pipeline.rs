@@ -1068,6 +1068,17 @@ fn demo_evidence(run_id: &str) -> Vec<EvidenceRecord> {
         run_id: run_id.into(),
         paper_id: format!("pmid:demo-{}", index + 1),
         paper_title: format!("PD-1 resistance evidence {}", index + 1),
+        authors: match index {
+            0 => vec!["Liu Y".into(), "Zhang Q".into()],
+            1 => vec!["Zhang L".into(), "Wang H".into()],
+            _ => vec!["Chen M".into(), "Xu R".into()],
+        },
+        genes: match index {
+            0 => vec!["B2M".into(), "HLA-A".into()],
+            1 => vec!["PDCD1".into(), "TOX".into()],
+            _ => vec![],
+        },
+        findings: vec![supports.into()],
         journal: Some("PaperPilot Demo Journal".into()),
         issn: None,
         impact_factor: None,
@@ -1109,7 +1120,7 @@ fn demo_report(run_id: &str, version: u32, evidence: Vec<EvidenceRecord>) -> Rep
     .collect();
     Report {
         contract_version: CONTRACT_VERSION.into(),
-        schema_version: "1.0".into(),
+        schema_version: "1.1".into(),
         run_id: run_id.into(),
         version,
         title: "PD-1 耐药标志物：证据图谱与下一步".into(),
@@ -1119,12 +1130,12 @@ fn demo_report(run_id: &str, version: u32, evidence: Vec<EvidenceRecord>) -> Rep
         claims: vec![
             Claim {
                 id: "claim-1".into(),
-                statement: "抗原呈递缺陷与原发耐药稳定相关。".into(),
+                statement: "跨队列证据提示，B2M/HLA-A 相关抗原呈递缺陷可能降低肿瘤细胞被 T 细胞识别和清除的概率，从而形成 PD-1 阻断原发耐药的免疫逃逸基础；现有观察性证据尚不能排除肿瘤负荷与克隆组成等混杂因素。".into(),
                 evidence_ids: vec![evidence_ids[0].clone()],
             },
             Claim {
                 id: "claim-2".into(),
-                statement: "耗竭表型的预测价值受采样时点影响。".into(),
+                statement: "治疗前后 PDCD1/TOX 耗竭表型的变化提示，T 细胞功能状态具有时间依赖性，其预测价值可能来自持续抗原刺激下的状态转换，而非固定的基线标志物；需要纵向采样和功能扰动验证这一解释。".into(),
                 evidence_ids: vec![evidence_ids[1].clone()],
             },
         ],

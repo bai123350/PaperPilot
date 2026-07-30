@@ -1,6 +1,7 @@
 pub mod attachments;
 pub mod cancellation;
 pub mod commands;
+mod conclusion_skills;
 pub mod contracts;
 pub mod crypto;
 pub mod gateway;

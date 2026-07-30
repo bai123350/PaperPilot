@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::{
     CONTRACT_VERSION,
     cancellation::CancellationToken,
+    conclusion_skills::{ACTIVE_CONCLUSION_SKILLS, conclusion_skill_guidance},
     contracts::{
         Claim, ConversationMessage, EvidenceRecord, Recommendation, Report, ResearchBrief,
         validate_report,
@@ -932,6 +933,9 @@ impl OpenAiResearchBackend {
                     run_id: run_id.into(),
                     paper_id: source.paper_id.clone(),
                     paper_title: source.title.clone(),
+                    authors: source.authors.clone(),
+                    genes: item.genes,
+                    findings: item.findings,
                     journal: source
                         .journal
                         .clone()
@@ -987,6 +991,7 @@ impl OpenAiResearchBackend {
                         json!({
                             "source_index": local_index,
                             "title": paper.title,
+                            "authors": paper.authors,
                             "excerpt": paper.excerpt,
                             "year": paper.year,
                             "databases": paper.sources,
@@ -998,6 +1003,8 @@ impl OpenAiResearchBackend {
                         "items": [{
                             "source_index": 0,
                             "support": "该摘要直接支持的简短结论",
+                            "genes": ["摘要或标题中明确出现的标准基因/蛋白符号；没有则返回空数组"],
+                            "findings": ["摘要明确报告的关键研究结果；最多3项"],
                             "evidence_type": "study design or evidence type",
                             "confidence": 0.8
                         }]
@@ -1032,12 +1039,21 @@ impl OpenAiResearchBackend {
                 else {
                     continue;
                 };
+                let support = support.to_owned();
                 let batch_index = requested[local_index];
+                let ranked = batch[batch_index];
+                let source = &papers[ranked.source_index];
+                let mut findings = normalize_entity_values(item.findings, 3);
+                if findings.is_empty() {
+                    findings.push(support.clone());
+                }
                 completed.insert(
                     batch_index,
                     ExtractedEvidence {
                         batch_index,
-                        support: support.to_owned(),
+                        support,
+                        genes: grounded_gene_values(item.genes, source),
+                        findings,
                         evidence_type: item
                             .evidence_type
                             .as_deref()
@@ -1058,6 +1074,11 @@ impl OpenAiResearchBackend {
                 ExtractedEvidence {
                     batch_index,
                     support: format!("模型已依据该论文摘要完成相关性解读：{}", ranked.reason),
+                    genes: vec![],
+                    findings: vec![format!(
+                        "模型已依据该论文摘要完成相关性解读：{}",
+                        ranked.reason
+                    )],
                     evidence_type: "abstract relevance assessment".into(),
                     confidence: (ranked.score / 20.0).clamp(0.0, 1.0),
                 },
@@ -1107,6 +1128,9 @@ impl LiveResearchBackend for OpenAiResearchBackend {
                     "id": item.id,
                     "paper_id": item.paper_id,
                     "paper_title": item.paper_title,
+                    "authors": item.authors,
+                    "genes": item.genes,
+                    "findings": item.findings,
                     "excerpt": truncate_chars(&item.excerpt, MAX_REPORT_EVIDENCE_CHARS),
                     "locator": item.locator,
                     "evidence_type": item.evidence_type,
@@ -1121,11 +1145,25 @@ impl LiveResearchBackend for OpenAiResearchBackend {
             "revision_request": revision_request,
             "allowed_evidence_ids": allowed_ids,
             "evidence": compact_evidence,
+            "active_conclusion_skills": ACTIVE_CONCLUSION_SKILLS,
             "requirements": {
                 "claim_evidence_coverage": "100%",
                 "recommendation_count": 3,
                 "language": "zh-CN",
                 "do_not_invent_sources": true,
+                "major_claims": {
+                    "synthesis_unit": "围绕生物学机制或过程跨论文综合，不得逐篇复述",
+                    "statement_structure": "证据中观察到的共同模式 → 对细胞状态、基因/蛋白、通路或表型的生物学解释 → 证据边界或替代解释",
+                    "concrete_entities": "优先写出 Evidence Record 中明确出现的细胞类型、基因/蛋白、通路、干预和表型；不得补充输入中没有的实体",
+                    "evidence_convergence": "存在多个 Evidence Record 时优先整合至少两个相互独立证据；不要因证据数量多就自动声称因果或机制已证实",
+                    "claim_calibration": "区分描述性、关联性、预测性、因果性和机制性结论；观察性或摘要级证据使用提示、关联、一致等审慎措辞",
+                    "avoid_generic_statements": [
+                        "某技术揭示了异质性",
+                        "某细胞发挥重要作用",
+                        "某治疗显示潜力"
+                    ],
+                    "length": "每条主要结论使用信息密集的 1 至 2 句中文，通常 70 至 180 个汉字"
+                },
                 "timeline": {
                     "publication_year_from": date_from,
                     "publication_year_to": date_to,
@@ -1136,12 +1174,10 @@ impl LiveResearchBackend for OpenAiResearchBackend {
             },
             "output_schema": report_output_schema()
         });
+        let system_prompt = report_system_prompt();
         let mut last_error = LiveResearchError::InvalidReportResponse;
         for _ in 0..MAX_MODEL_REQUEST_ATTEMPTS {
-            let value = self.complete_json(
-                "你是 PaperPilot 生物医学研究综合器。只能引用 allowed_evidence_ids；必须输出严格 JSON；不得使用模型记忆补充未提供的研究结果；timeline 必须按发表年份升序呈现文献成果演进，默认从 2010 年到当前最新年份；建议必须恰好三个。",
-                payload.clone(),
-            )?;
+            let value = self.complete_json(&system_prompt, payload.clone())?;
             let draft: ReportDraft = match serde_json::from_value(value) {
                 Ok(draft) => draft,
                 Err(_) => {
@@ -1207,6 +1243,13 @@ impl LiveResearchBackend for OpenAiResearchBackend {
     }
 }
 
+fn report_system_prompt() -> String {
+    format!(
+        "你是 PaperPilot 生物医学研究综合器。只能引用 allowed_evidence_ids；必须输出严格 JSON；不得使用模型记忆补充未提供的研究结果；timeline 必须按发表年份升序呈现文献成果演进，默认从 2010 年到当前最新年份；建议必须恰好三个。\n\n{}\n\n执行边界：这些技能只用于改进证据综合和结论表达，不能绕过 Evidence Record、凭常识补写机制或把候选解释写成已证实事实。主要结论必须先说明证据观察，再给出有边界的生物学解释；若输入不足以支持机制，只写关联并明确需要何种验证。",
+        conclusion_skill_guidance()
+    )
+}
+
 #[derive(Debug, Deserialize)]
 struct ChatCompletion {
     choices: Vec<ChatChoice>,
@@ -1248,6 +1291,7 @@ struct EuropePmcResult {
     pub_year: Option<String>,
     journal_title: Option<String>,
     journal_issn: Option<String>,
+    author_string: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1284,6 +1328,18 @@ struct OpenAlexWork {
     ids: OpenAlexIds,
     primary_location: Option<OpenAlexLocation>,
     abstract_inverted_index: Option<HashMap<String, Vec<usize>>>,
+    #[serde(default)]
+    authorships: Vec<OpenAlexAuthorship>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAlexAuthorship {
+    author: Option<OpenAlexAuthor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAlexAuthor {
+    display_name: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1331,6 +1387,15 @@ struct CrossrefWork {
     container_title: Vec<String>,
     #[serde(default, rename = "ISSN")]
     issn: Vec<String>,
+    #[serde(default)]
+    author: Vec<CrossrefAuthor>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CrossrefAuthor {
+    given: Option<String>,
+    family: Option<String>,
+    name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1343,6 +1408,7 @@ struct CrossrefPublished {
 struct SourcePaper {
     paper_id: String,
     title: String,
+    authors: Vec<String>,
     excerpt: String,
     year: Option<String>,
     journal: Option<String>,
@@ -1359,6 +1425,8 @@ struct RankedPaper {
 struct ExtractedEvidence {
     batch_index: usize,
     support: String,
+    genes: Vec<String>,
+    findings: Vec<String>,
     evidence_type: String,
     confidence: f32,
 }
@@ -1396,6 +1464,7 @@ impl SourcePaper {
         Some(Self {
             paper_id,
             title,
+            authors: split_author_string(result.author_string.as_deref()),
             excerpt,
             year: result.pub_year,
             journal: result.journal_title,
@@ -1428,9 +1497,17 @@ impl SourcePaper {
                 )
             })
             .unwrap_or_default();
+        let authors = normalize_entity_values(
+            work.authorships
+                .into_iter()
+                .filter_map(|authorship| authorship.author?.display_name)
+                .collect(),
+            50,
+        );
         Some(Self {
             paper_id,
             title,
+            authors,
             excerpt,
             year: work.publication_year.map(|year| year.to_string()),
             journal,
@@ -1454,6 +1531,22 @@ impl SourcePaper {
         Some(Self {
             paper_id,
             title,
+            authors: normalize_entity_values(
+                work.author
+                    .into_iter()
+                    .filter_map(|author| {
+                        author.name.or_else(|| {
+                            let value = [author.given, author.family]
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            (!value.trim().is_empty()).then_some(value)
+                        })
+                    })
+                    .collect(),
+                50,
+            ),
             excerpt,
             year,
             journal: work.container_title.into_iter().next(),
@@ -1487,6 +1580,10 @@ struct PubMedPaperBuilder {
     pmid: String,
     doi: String,
     title: String,
+    authors: Vec<String>,
+    author_given: String,
+    author_family: String,
+    collective_author: String,
     abstract_text: String,
     year: String,
     journal: String,
@@ -1510,6 +1607,7 @@ impl PubMedPaperBuilder {
         Some(SourcePaper {
             paper_id,
             title,
+            authors: normalize_entity_values(self.authors, 50),
             excerpt,
             year: (!self.year.trim().is_empty()).then(|| self.year.trim().to_owned()),
             journal: (!self.journal.trim().is_empty()).then(|| self.journal.trim().to_owned()),
@@ -1524,6 +1622,9 @@ enum PubMedField {
     Pmid,
     Doi,
     Title,
+    AuthorGiven,
+    AuthorFamily,
+    CollectiveAuthor,
     Abstract,
     Year,
     Journal,
@@ -1544,6 +1645,11 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<SourcePaper>, SourceSearchError> {
                     b"PubmedArticle" => current = Some(PubMedPaperBuilder::default()),
                     b"PMID" if current.is_some() => field = Some(PubMedField::Pmid),
                     b"ArticleTitle" if current.is_some() => field = Some(PubMedField::Title),
+                    b"ForeName" if current.is_some() => field = Some(PubMedField::AuthorGiven),
+                    b"LastName" if current.is_some() => field = Some(PubMedField::AuthorFamily),
+                    b"CollectiveName" if current.is_some() => {
+                        field = Some(PubMedField::CollectiveAuthor)
+                    }
                     b"AbstractText" if current.is_some() => {
                         if let Some(builder) = current.as_mut()
                             && !builder.abstract_text.is_empty()
@@ -1580,6 +1686,9 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<SourcePaper>, SourceSearchError> {
                         }
                         PubMedField::Doi => builder.doi.push_str(&value),
                         PubMedField::Title => builder.title.push_str(&value),
+                        PubMedField::AuthorGiven => builder.author_given.push_str(&value),
+                        PubMedField::AuthorFamily => builder.author_family.push_str(&value),
+                        PubMedField::CollectiveAuthor => builder.collective_author.push_str(&value),
                         PubMedField::Abstract => builder.abstract_text.push_str(&value),
                         PubMedField::Year if builder.year.is_empty() => {
                             builder.year.push_str(&value)
@@ -1595,14 +1704,36 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<SourcePaper>, SourceSearchError> {
                 }
             }
             Ok(Event::End(event)) => match event.name().as_ref() {
+                b"Author" => {
+                    if let Some(builder) = current.as_mut() {
+                        let author = if !builder.collective_author.trim().is_empty() {
+                            builder.collective_author.trim().to_owned()
+                        } else {
+                            format!(
+                                "{} {}",
+                                builder.author_given.trim(),
+                                builder.author_family.trim()
+                            )
+                            .trim()
+                            .to_owned()
+                        };
+                        if !author.is_empty() {
+                            builder.authors.push(author);
+                        }
+                        builder.author_given.clear();
+                        builder.author_family.clear();
+                        builder.collective_author.clear();
+                    }
+                    field = None;
+                }
                 b"PubmedArticle" => {
                     if let Some(paper) = current.take().and_then(PubMedPaperBuilder::finish) {
                         papers.push(paper);
                     }
                     field = None;
                 }
-                b"PMID" | b"ArticleTitle" | b"AbstractText" | b"Year" | b"Title" | b"ISSN"
-                | b"ArticleId" => {
+                b"PMID" | b"ArticleTitle" | b"ForeName" | b"LastName" | b"CollectiveName"
+                | b"AbstractText" | b"Year" | b"Title" | b"ISSN" | b"ArticleId" => {
                     field = None;
                 }
                 _ => {}
@@ -1882,6 +2013,15 @@ fn merge_duplicate_papers(papers: Vec<SourcePaper>) -> Vec<SourcePaper> {
             .or_else(|| by_title.get(&title).copied());
         if let Some(index) = existing {
             let current = &mut merged[index];
+            current.authors = normalize_entity_values(
+                current
+                    .authors
+                    .iter()
+                    .chain(paper.authors.iter())
+                    .cloned()
+                    .collect(),
+                50,
+            );
             for source in paper.sources {
                 if !current.sources.contains(&source) {
                     current.sources.push(source);
@@ -1913,6 +2053,46 @@ fn normalize_title(title: &str) -> String {
         .chars()
         .filter(|character| character.is_alphanumeric())
         .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn normalize_entity_values(values: Vec<String>, limit: usize) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for value in values {
+        let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        if value.is_empty() || value.chars().count() > 160 {
+            continue;
+        }
+        let key = value.to_lowercase();
+        if seen.insert(key) {
+            normalized.push(value);
+        }
+        if normalized.len() >= limit {
+            break;
+        }
+    }
+    normalized
+}
+
+fn split_author_string(value: Option<&str>) -> Vec<String> {
+    normalize_entity_values(
+        value
+            .unwrap_or_default()
+            .split([',', ';'])
+            .map(str::trim)
+            .filter(|author| !author.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        50,
+    )
+}
+
+fn grounded_gene_values(values: Vec<String>, paper: &SourcePaper) -> Vec<String> {
+    let searchable = format!("{} {}", paper.title, paper.excerpt).to_lowercase();
+    normalize_entity_values(values, 24)
+        .into_iter()
+        .filter(|gene| searchable.contains(&gene.to_lowercase()))
         .collect()
 }
 
@@ -1992,6 +2172,15 @@ struct EvidenceItem {
     source_index: Value,
     #[serde(alias = "supports", alias = "claim", alias = "conclusion")]
     support: Option<String>,
+    #[serde(default, alias = "geneSymbols", alias = "gene_symbols")]
+    genes: Vec<String>,
+    #[serde(
+        default,
+        alias = "results",
+        alias = "keyFindings",
+        alias = "key_findings"
+    )]
+    findings: Vec<String>,
     #[serde(alias = "evidenceType", alias = "type")]
     evidence_type: Option<String>,
     #[serde(default)]
@@ -2025,7 +2214,7 @@ impl ReportDraft {
             .collect();
         Report {
             contract_version: CONTRACT_VERSION.into(),
-            schema_version: "1.0".into(),
+            schema_version: "1.1".into(),
             run_id: run_id.into(),
             version,
             title: self.title,
@@ -2051,7 +2240,11 @@ fn report_output_schema() -> Value {
         "summary": "摘要",
         "timeline": ["2010：基于当年 Evidence Record 归纳的具体文献成果", "2026：最新文献成果"],
         "themes": ["主题"],
-        "claims": [{"id": "claim-1", "statement": "结论", "evidenceIds": ["allowed id"]}],
+        "claims": [{
+            "id": "claim-1",
+            "statement": "跨论文证据观察 → 涉及具体细胞、基因/蛋白、通路或表型的生物学解释 → 证据边界或替代解释",
+            "evidenceIds": ["allowed id"]
+        }],
         "controversies": ["争议"],
         "limitations": ["局限"],
         "gaps": ["研究空白"],
@@ -2274,12 +2467,13 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        CROSSREF, CROSSREF_MAX_SEARCH_RESULTS, CROSSREF_PAGE_SIZE, CrossrefResponse, CrossrefWork,
-        EUROPE_PMC, EUROPE_PMC_PAGE_SIZE, EuropePmcResponse, LiveResearchError, OPENALEX_PAGE_SIZE,
-        OpenAlexResponse, PUBMED, SourcePaper, boolean_query_groups, classify_model_error,
-        fallback_search_query, google_scholar_search_url, merge_duplicate_papers,
-        parse_confidence_value, parse_json_content, parse_pubmed_xml, parse_score_value,
-        parse_search_query_value, parse_usize_value, reconstruct_openalex_abstract,
+        CROSSREF, CROSSREF_MAX_SEARCH_RESULTS, CROSSREF_PAGE_SIZE, CrossrefAuthor,
+        CrossrefResponse, CrossrefWork, EUROPE_PMC, EUROPE_PMC_PAGE_SIZE, EuropePmcResponse,
+        LiveResearchError, OPENALEX_PAGE_SIZE, OpenAlexResponse, PUBMED, SourcePaper,
+        boolean_query_groups, classify_model_error, fallback_search_query,
+        google_scholar_search_url, merge_duplicate_papers, parse_confidence_value,
+        parse_json_content, parse_pubmed_xml, parse_score_value, parse_search_query_value,
+        parse_usize_value, reconstruct_openalex_abstract, report_system_prompt,
         source_paper_abstract_contains_query_keyword, truncate_chars,
     };
     use serde_json::json;
@@ -2304,6 +2498,16 @@ mod tests {
     #[test]
     fn limits_excerpts_by_unicode_character_count() {
         assert_eq!(truncate_chars("中文摘要", 2), "中文");
+    }
+
+    #[test]
+    fn report_synthesis_activates_local_conclusion_skills() {
+        let prompt = report_system_prompt();
+        assert!(prompt.contains("literature-review"));
+        assert!(prompt.contains("scientific-critical-thinking"));
+        assert!(prompt.contains("hypothesis-generation"));
+        assert!(prompt.contains("不能绕过 Evidence Record"));
+        assert!(prompt.contains("生物学解释"));
     }
 
     #[test]
@@ -2339,6 +2543,8 @@ mod tests {
         let papers = parse_pubmed_xml(
             r#"<PubmedArticleSet><PubmedArticle><MedlineCitation>
                 <PMID>12345</PMID><Article><ArticleTitle>A useful paper</ArticleTitle>
+                <AuthorList><Author><LastName>Liu</LastName><ForeName>Ada</ForeName></Author>
+                <Author><CollectiveName>PaperPilot Consortium</CollectiveName></Author></AuthorList>
                 <Abstract><AbstractText Label="BACKGROUND">First section.</AbstractText>
                 <AbstractText>Second section.</AbstractText></Abstract>
                 <Journal><ISSN IssnType="Print">0028-0836</ISSN><JournalIssue><PubDate><Year>2025</Year></PubDate></JournalIssue><Title>Nature</Title></Journal>
@@ -2349,6 +2555,7 @@ mod tests {
         .unwrap();
         assert_eq!(papers.len(), 1);
         assert_eq!(papers[0].paper_id, "pmid:12345");
+        assert_eq!(papers[0].authors, vec!["Ada Liu", "PaperPilot Consortium"]);
         assert_eq!(papers[0].excerpt, "First section. Second section.");
         assert_eq!(papers[0].journal.as_deref(), Some("Nature"));
         assert_eq!(papers[0].issn.as_deref(), Some("0028-0836"));
@@ -2488,6 +2695,11 @@ mod tests {
             published: None,
             container_title: vec!["Cancer Research".into()],
             issn: vec!["0008-5472".into()],
+            author: vec![CrossrefAuthor {
+                given: Some("Ada".into()),
+                family: Some("Liu".into()),
+                name: None,
+            }],
         };
         let broad_but_irrelevant = CrossrefWork {
             doi: Some("10.1000/irrelevant".into()),
@@ -2496,6 +2708,7 @@ mod tests {
             published: None,
             container_title: vec![],
             issn: vec![],
+            author: vec![],
         };
         let query = r#"("PD-1" OR "programmed death 1") AND (resistance OR refractory)"#;
 
@@ -2514,6 +2727,7 @@ mod tests {
         let paper = SourcePaper {
             paper_id: "openalex:W1".into(),
             title: "PD-1 blockade in melanoma".into(),
+            authors: vec!["Ada Liu".into()],
             excerpt: "Acquired resistance limits durable response.".into(),
             year: Some("2025".into()),
             journal: Some("Example Journal".into()),
@@ -2551,6 +2765,7 @@ mod tests {
             SourcePaper {
                 paper_id: "doi:10.1000/example".into(),
                 title: "Shared title".into(),
+                authors: vec!["Ada Liu".into()],
                 excerpt: "Short abstract.".into(),
                 year: Some("2024".into()),
                 journal: None,
@@ -2560,6 +2775,7 @@ mod tests {
             SourcePaper {
                 paper_id: "doi:10.1000/example".into(),
                 title: "A different provider title".into(),
+                authors: vec!["Bo Wang".into()],
                 excerpt: "A longer abstract returned by the second database.".into(),
                 year: Some("2024".into()),
                 journal: Some("Shared Journal".into()),
@@ -2569,6 +2785,7 @@ mod tests {
         ]);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].sources, vec![EUROPE_PMC, CROSSREF]);
+        assert_eq!(merged[0].authors, vec!["Ada Liu", "Bo Wang"]);
         assert!(merged[0].excerpt.starts_with("A longer"));
     }
 }

@@ -25,7 +25,7 @@ export type MessageResult = { message: ConversationMessage, action: MessageActio
 
 export type RunEvent = { contractVersion: string, runId: string, sequence: number, status: RunStatus, stage: string | null, progress: number, operation: RunOperation | null, safeSummary: string, };
 
-export type EvidenceRecord = { id: string, runId: string, paperId: string, paperTitle: string, journal: string | null, issn: string | null, impactFactor: number | null, impactFactorYear: number | null, impactFactorSource: string | null, impactFactorUrl: string | null, excerpt: string, locator: string, evidenceType: string, confidence: number, supports: Array<string>, };
+export type EvidenceRecord = { id: string, runId: string, paperId: string, paperTitle: string, authors: Array<string>, genes: Array<string>, findings: Array<string>, journal: string | null, issn: string | null, impactFactor: number | null, impactFactorYear: number | null, impactFactorSource: string | null, impactFactorUrl: string | null, excerpt: string, locator: string, evidenceType: string, confidence: number, supports: Array<string>, };
 
 export type Claim = { id: string, statement: string, evidenceIds: Array<string>, };
 

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { describe, expect, it, vi } from "vitest";
 
@@ -45,6 +45,9 @@ const report: Report = {
       runId: "run-1",
       paperId: "pmid:1",
       paperTitle: "Evidence paper",
+      authors: ["Ada Liu", "Bo Wang"],
+      genes: ["B2M", "HLA-A"],
+      findings: ["B2M 缺失与抗原呈递下降相关。"],
       journal: null,
       issn: null,
       impactFactor: null,
@@ -405,9 +408,21 @@ describe("desktop workspace", () => {
 
     expect(screen.getByRole("heading", { name: report.title })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "研究脉络云图" })).toBeInTheDocument();
-    expect(screen.getByRole("group", { name: /研究脉络云图/ })).toBeInTheDocument();
-    expect(container.querySelectorAll('[data-testid="research-direction-branch"]').length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: "研究知识图谱" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /研究知识图谱/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "研究知识图谱，纵向滚动" })).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
+    expect(screen.getByTestId("research-knowledge-graph")).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-testid="knowledge-direction-node"]').length).toBeGreaterThan(0);
+    expect(container.querySelectorAll('[data-testid="knowledge-paper-node"]')).toHaveLength(3);
+    expect(container.querySelectorAll(".knowledge-edge-theme").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".knowledge-edge-association")).toHaveLength(3);
+    expect(container.querySelectorAll('[data-testid="knowledge-entity-node"]')).toHaveLength(5);
+    expect(container.querySelectorAll(".knowledge-edge-author")).toHaveLength(2);
+    expect(container.querySelectorAll(".knowledge-edge-gene")).toHaveLength(2);
+    expect(container.querySelectorAll(".knowledge-edge-finding")).toHaveLength(1);
     expect(screen.getAllByText("2010").length).toBeGreaterThan(0);
     expect(screen.getAllByText("早期文献建立了机制假设", { exact: false }).length).toBeGreaterThan(0);
     expect(screen.getAllByText("独立研究完成验证", { exact: false }).length).toBeGreaterThan(0);
@@ -428,7 +443,11 @@ describe("desktop workspace", () => {
     fireEvent.click(pmidLink);
     expect(openUrl).toHaveBeenCalledWith("https://pubmed.ncbi.nlm.nih.gov/1/");
     fireEvent.click(inlineEvidence);
-    expect(screen.getByLabelText("证据详情")).toBeInTheDocument();
+    const evidenceDrawer = screen.getByLabelText("证据详情");
+    expect(evidenceDrawer).toBeInTheDocument();
+    expect(within(evidenceDrawer).getByText("Ada Liu、Bo Wang")).toBeInTheDocument();
+    expect(within(evidenceDrawer).getByText("B2M")).toBeInTheDocument();
+    expect(within(evidenceDrawer).getByText("B2M 缺失与抗原呈递下降相关。")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "主题版图" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "参考文献" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "影响因子" })).toBeInTheDocument();
