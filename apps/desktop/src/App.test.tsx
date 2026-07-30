@@ -38,7 +38,13 @@ describe("desktop app shell", () => {
         configured: true,
         apiKeyHint: "••••1234",
       }),
-      saveModelSettings: vi.fn(),
+      saveModelSettings: vi.fn().mockResolvedValue({
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        baseUrl: "https://api.deepseek.com",
+        configured: true,
+        apiKeyHint: "••••1234",
+      }),
       createProject: vi.fn(),
       startRun: vi.fn(),
       retryRun: vi.fn(),
@@ -77,6 +83,21 @@ describe("desktop app shell", () => {
     );
     expect(screen.getByText("准备开始")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "报告生成中" })).toBeInTheDocument();
+
+    fireEvent.change(await screen.findByRole("combobox", { name: "当前使用的模型" }), {
+      target: { value: "deepseek-v4-flash" },
+    });
+    await waitFor(() =>
+      expect(bridge.saveModelSettings).toHaveBeenCalledWith({
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        baseUrl: "https://api.deepseek.com",
+        apiKey: "",
+      }),
+    );
+    expect(screen.getByRole("combobox", { name: "当前使用的模型" })).toHaveValue(
+      "deepseek-v4-flash",
+    );
 
     await waitFor(() => expect(runEventHandler).toBeDefined());
     act(() => {

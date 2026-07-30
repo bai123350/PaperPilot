@@ -33,6 +33,11 @@ const providerDefaults: Record<
   },
 };
 
+const deepseekModels = [
+  { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
+  { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
+] as const;
+
 export function ModelSettingsDialog({
   current,
   required,
@@ -159,14 +164,27 @@ export function ModelSettingsDialog({
           </label>
           <label>
             模型名称
-            <input
-              aria-label="模型名称"
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              placeholder="例如 deepseek-v4-pro"
-              disabled={saving || provider === "deepseek"}
-            />
-            {provider === "deepseek" ? <small>DeepSeek 固定使用 V4 Pro，不使用 Flash。</small> : null}
+            {provider === "deepseek" ? (
+              <select
+                aria-label="模型名称"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                disabled={saving}
+              >
+                {deepseekModels.map((item) => (
+                  <option key={item.value} value={item.value}>{item.label}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                aria-label="模型名称"
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                placeholder="例如 gpt-5-mini"
+                disabled={saving}
+              />
+            )}
+            {provider === "deepseek" ? <small>可随时在研究输入框中切换 Flash 或 Pro。</small> : null}
           </label>
           <label>
             API 地址

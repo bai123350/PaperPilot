@@ -26,6 +26,11 @@ import { Workspace } from "./workspace";
 import { ModelSettingsDialog } from "./model-settings-dialog";
 import "./App.css";
 
+const deepseekComposerModels = [
+  { value: "deepseek-v4-flash", label: "V4 Flash" },
+  { value: "deepseek-v4-pro", label: "V4 Pro" },
+] as const;
+
 export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Project | null>(null);
@@ -267,6 +272,29 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
     }
   }
 
+  async function changeComposerModel(model: string) {
+    if (
+      !modelSettings
+      || modelSettings.provider !== "deepseek"
+      || modelSettings.model === model
+    ) return;
+    setPending(true);
+    setError(null);
+    try {
+      const saved = await bridge.saveModelSettings({
+        provider: modelSettings.provider,
+        model,
+        baseUrl: modelSettings.baseUrl,
+        apiKey: "",
+      });
+      setModelSettings(saved);
+    } catch (reason) {
+      showError(reason);
+    } finally {
+      setPending(false);
+    }
+  }
+
   function showCurrentReport() {
     reportLoadSequence.current += 1;
     setSelectedReportRunId(null);
@@ -468,6 +496,13 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
             rerunDraft={rerunDraft}
             onPrepareRerun={prepareRerun}
             onCancelRerun={() => setRerunDraft(null)}
+            model={modelSettings?.model}
+            modelOptions={
+              modelSettings?.provider === "deepseek"
+                ? deepseekComposerModels
+                : []
+            }
+            onModelChange={changeComposerModel}
           />
         )}
         {settingsDialog()}

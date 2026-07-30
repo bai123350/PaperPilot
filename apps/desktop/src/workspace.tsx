@@ -7,11 +7,20 @@ import {
   Download,
   FileText,
   FlaskConical,
+  Gauge,
+  GitBranch,
+  Hand,
+  Lightbulb,
+  Paperclip,
+  Plus,
   Printer,
+  Puzzle,
   RotateCcw,
   Send,
   Settings,
+  ShieldCheck,
   Square,
+  Target,
   UserRound,
   X,
 } from "lucide-react";
@@ -51,11 +60,83 @@ interface WorkspaceProps {
   selectedRunId?: string | null;
   reportLoading?: boolean;
   onSelectRun?: (runId: string | null) => Promise<void> | void;
+  model?: string;
+  modelOptions?: readonly { value: string; label: string }[];
+  onModelChange?: (model: string) => Promise<void> | void;
 }
 
 type TimelineEntry =
   | { kind: "message"; sequence: number; value: ConversationMessage }
   | { kind: "operation"; sequence: number; value: RunOperation };
+
+interface DirectionStudy {
+  year: string;
+  text: string;
+}
+
+interface ResearchDirection {
+  id: string;
+  label: string;
+  description: string;
+  studies: DirectionStudy[];
+}
+
+type PermissionMode = "ask" | "approve" | "full";
+
+const timelineItemPattern = /^((?:19|20)\d{2}(?:[–—-](?:19|20)\d{2})?)[：:]\s*(.*)$/;
+
+const researchDirectionRules = [
+  {
+    id: "translation",
+    label: "干预与转化",
+    description: "药物、靶向干预与疗效验证",
+    keywords: ["治疗", "干预", "药物", "抑制剂", "激动剂", "拮抗剂", "给药", "保护", "疗法", "靶向", "移植"],
+  },
+  {
+    id: "clinical",
+    label: "临床与人群证据",
+    description: "患者样本、队列与临床关联",
+    keywords: ["患者", "临床", "队列", "病例", "人群", "血清", "血浆", "样本", "预后", "诊断", "生物标志物", "抗体"],
+  },
+  {
+    id: "methods",
+    label: "模型与技术",
+    description: "实验模型、组学与分析方法",
+    keywords: ["模型", "小鼠", "大鼠", "动物", "体外", "细胞系", "测序", "组学", "成像", "图谱", "分析", "方法", "技术", "多模态"],
+  },
+  {
+    id: "mechanism",
+    label: "机制与通路",
+    description: "细胞过程、分子机制与信号通路",
+    keywords: ["机制", "通路", "信号", "受体", "蛋白", "基因", "炎症", "免疫", "细胞", "死亡", "激活", "表达", "分子", "病理", "神经"],
+  },
+] as const;
+
+const permissionOptions: {
+  value: PermissionMode;
+  label: string;
+  description: string;
+  icon: typeof Hand;
+}[] = [
+  {
+    value: "ask",
+    label: "请求批准",
+    description: "编辑外部文件和使用互联网时始终询问",
+    icon: Hand,
+  },
+  {
+    value: "approve",
+    label: "替我审批",
+    description: "仅对检测到的风险操作请求批准",
+    icon: Gauge,
+  },
+  {
+    value: "full",
+    label: "完全访问权限",
+    description: "允许访问互联网和电脑上的文件",
+    icon: ShieldCheck,
+  },
+];
 
 export function Workspace({
   projectName,
@@ -80,6 +161,9 @@ export function Workspace({
   selectedRunId = null,
   reportLoading = false,
   onSelectRun,
+  model,
+  modelOptions = [],
+  onModelChange,
 }: WorkspaceProps) {
   const [content, setContent] = useState("");
   const [evidence, setEvidence] = useState<EvidenceRecord | null>(null);
@@ -92,6 +176,12 @@ export function Workspace({
   const [dateTo, setDateTo] = useState("");
   const [studyTypes, setStudyTypes] = useState("");
   const [briefError, setBriefError] = useState<string | null>(null);
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
+    const saved = window.localStorage.getItem("paperpilot.permissionMode");
+    return saved === "ask" || saved === "full" ? saved : "approve";
+  });
+  const addMenu = useRef<HTMLDetailsElement>(null);
+  const permissionMenu = useRef<HTMLDetailsElement>(null);
   const timelineEnd = useRef<HTMLDivElement>(null);
   const canCompose = !run || run.status === "completed";
   const canPause = Boolean(
@@ -118,6 +208,9 @@ export function Workspace({
     setStudyTypes(rerunDraft.studyTypes.join(", "));
     setBriefError(null);
   }, [rerunDraft]);
+  useEffect(() => {
+    window.localStorage.setItem("paperpilot.permissionMode", permissionMode);
+  }, [permissionMode]);
 
   async function submit() {
     const value = content.trim();
@@ -282,30 +375,124 @@ export function Workspace({
           {briefError ? <p className="brief-error" role="alert">{briefError}</p> : null}
         </details>
         <div className="composer">
-          <textarea
-            aria-label={run ? "继续研究对话" : "输入研究问题"}
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void submit();
+          <div className="composer-input">
+            <textarea
+              aria-label={run ? "继续研究对话" : "输入研究问题"}
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void submit();
+                }
+              }}
+              placeholder={
+                run?.status === "completed"
+                  ? "追问证据或描述新的研究约束…"
+                  : rerunDraft
+                    ? "修改研究问题后重新运行…"
+                  : run
+                    ? "研究运行中，完成后可继续追问…"
+                    : "输入研究问题…"
               }
-            }}
-            placeholder={
-              run?.status === "completed"
-                ? "追问证据或描述新的研究约束…"
-                : rerunDraft
-                  ? "修改研究问题后重新运行…"
-                : run
-                  ? "研究运行中，完成后可继续追问…"
-                  : "输入研究问题…"
-            }
-            disabled={pending || !canCompose}
-          />
-          <button type="button" onClick={() => void submit()} disabled={!content.trim() || pending || !canCompose} aria-label="发送">
-            <Send size={17} aria-hidden="true" />
-          </button>
+              disabled={pending || !canCompose}
+            />
+            <div className="composer-actions">
+              <div className="composer-actions-left">
+                <details
+                  className="composer-menu"
+                  ref={addMenu}
+                  onToggle={(event) => {
+                    if (event.currentTarget.open) permissionMenu.current?.removeAttribute("open");
+                  }}
+                >
+                  <summary aria-label="添加">
+                    <Plus size={18} aria-hidden="true" />
+                  </summary>
+                  <div className="composer-popover add-popover">
+                    <strong>添加</strong>
+                    <button type="button" disabled>
+                      <Paperclip size={17} aria-hidden="true" />
+                      <span>文件与 PDF<small>即将支持</small></span>
+                    </button>
+                    <button type="button" disabled>
+                      <Target size={17} aria-hidden="true" />
+                      <span>目标<small>即将支持</small></span>
+                    </button>
+                    <button type="button" disabled>
+                      <Lightbulb size={17} aria-hidden="true" />
+                      <span>计划模式<small>即将支持</small></span>
+                    </button>
+                    <div className="popover-section-title">插件</div>
+                    <button type="button" disabled>
+                      <Puzzle size={17} aria-hidden="true" />
+                      <span>插件中心<small>后续可在这里添加插件</small></span>
+                    </button>
+                  </div>
+                </details>
+                <details
+                  className="composer-menu permission-menu"
+                  ref={permissionMenu}
+                  onToggle={(event) => {
+                    if (event.currentTarget.open) addMenu.current?.removeAttribute("open");
+                  }}
+                >
+                  <summary aria-label={`权限：${permissionOptions.find((item) => item.value === permissionMode)!.label}`}>
+                    <Gauge size={16} aria-hidden="true" />
+                    {permissionOptions.find((item) => item.value === permissionMode)!.label}
+                  </summary>
+                  <div className="composer-popover permission-popover">
+                    {permissionOptions.map((option) => {
+                      const PermissionIcon = option.icon;
+                      return (
+                        <button
+                          aria-label={option.label}
+                          className={`${permissionMode === option.value ? "selected " : ""}permission-option-${option.value}`}
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            setPermissionMode(option.value);
+                            permissionMenu.current!.open = false;
+                          }}
+                        >
+                          <PermissionIcon size={17} aria-hidden="true" />
+                          <span>{option.label}<small>{option.description}</small></span>
+                          {permissionMode === option.value ? <CheckCircle2 size={16} /> : null}
+                        </button>
+                      );
+                    })}
+                    <p>该偏好将用于后续插件；当前研究流程不会申请额外系统权限。</p>
+                  </div>
+                </details>
+              </div>
+              <div className="composer-actions-right">
+                {model && modelOptions.length > 0 ? (
+                  <label className="composer-model">
+                    <span className="visually-hidden">模型</span>
+                    <select
+                      aria-label="当前使用的模型"
+                      value={model}
+                      disabled={pending}
+                      onChange={(event) => void onModelChange?.(event.target.value)}
+                    >
+                      {modelOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+                <button
+                  className="composer-send"
+                  type="button"
+                  onClick={() => void submit()}
+                  disabled={!content.trim() || pending || !canCompose}
+                  aria-label="发送"
+                >
+                  <Send size={17} aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -492,7 +679,7 @@ function ReportDocument({
       <ReportSection title="进展时间线">
         <ol className="report-timeline">
           {report.timeline.map((item, index) => {
-            const parsed = item.match(/^((?:19|20)\d{2}(?:[–—-](?:19|20)\d{2})?)[：:]\s*(.*)$/);
+            const parsed = item.match(timelineItemPattern);
             const studies = splitTimelineStudies(parsed?.[2] ?? item);
             return (
               <li key={`${index}-${item}`}>
@@ -501,6 +688,7 @@ function ReportDocument({
                   {studies.map((study, studyIndex) => (
                     <p key={`${studyIndex}-${study}`}>
                       <EvidenceText text={study} evidence={report.evidence} onEvidence={onEvidence} />
+                      {/[。！？!?；;]$/.test(study.trim()) ? null : "。"}
                     </p>
                   ))}
                 </div>
@@ -508,6 +696,12 @@ function ReportDocument({
             );
           })}
         </ol>
+        <ResearchDirectionMap
+          title={report.title}
+          timeline={report.timeline}
+          evidence={report.evidence}
+          onEvidence={onEvidence}
+        />
       </ReportSection>
       <ReportSection title="主题版图">
         <ul>{report.themes.map((item) => <li key={item}><EvidenceText text={item} evidence={report.evidence} onEvidence={onEvidence} /></li>)}</ul>
@@ -613,6 +807,121 @@ export function splitTimelineStudies(value: string): string[] {
   return studies.length > 0 ? studies : [value];
 }
 
+export function buildResearchDirections(timeline: string[]): ResearchDirection[] {
+  const grouped = new Map<string, DirectionStudy[]>();
+
+  timeline.forEach((item) => {
+    const parsed = item.match(timelineItemPattern);
+    const year = parsed?.[1] ?? "阶段";
+    splitTimelineStudies(parsed?.[2] ?? item).forEach((study) => {
+      const searchable = study.replace(/[（(]?\s*evidence-\d+\s*[）)]?/gi, "");
+      const ranked = researchDirectionRules
+        .map((rule, index) => ({
+          rule,
+          index,
+          score: rule.keywords.reduce(
+            (score, keyword) => score + (searchable.includes(keyword) ? 1 : 0),
+            0,
+          ),
+        }))
+        .sort((left, right) => right.score - left.score || left.index - right.index);
+      const directionId = ranked[0].score > 0 ? ranked[0].rule.id : "general";
+      grouped.set(directionId, [...(grouped.get(directionId) ?? []), { year, text: study }]);
+    });
+  });
+
+  const directions: ResearchDirection[] = researchDirectionRules
+    .filter((rule) => grouped.has(rule.id))
+    .map((rule) => ({
+      id: rule.id,
+      label: rule.label,
+      description: rule.description,
+      studies: grouped.get(rule.id) ?? [],
+    }));
+  const generalStudies = grouped.get("general");
+  if (generalStudies?.length) {
+    directions.push({
+      id: "general",
+      label: "综合探索",
+      description: "跨方向发现与综合性验证",
+      studies: generalStudies,
+    });
+  }
+  return directions;
+}
+
+function ResearchDirectionMap({
+  title,
+  timeline,
+  evidence,
+  onEvidence,
+}: {
+  title: string;
+  timeline: string[];
+  evidence: EvidenceRecord[];
+  onEvidence: (ids: string[]) => void;
+}) {
+  const directions = buildResearchDirections(timeline);
+  if (directions.length === 0) return null;
+
+  return (
+    <section className="research-direction-map" aria-labelledby="research-direction-title">
+      <header>
+        <span><GitBranch size={17} aria-hidden="true" /></span>
+        <div>
+          <h3 id="research-direction-title">研究脉络云图</h3>
+          <p>中心主题向外延展为研究方向，相似研究聚集在同一分支并按年份排列。</p>
+        </div>
+      </header>
+      <div className="direction-cloud-scroll">
+        <div
+          className="direction-cloud"
+          role="group"
+          aria-label={`${title}的研究脉络云图，共${directions.length}个方向`}
+        >
+          <div className="cloud-hub">
+            <span>研究主题</span>
+            <strong>{title}</strong>
+            <small>{directions.length} 个方向</small>
+          </div>
+          <div className="cloud-branches">
+            {directions.map((direction, directionIndex) => {
+              const years = direction.studies.map((study) => study.year);
+              const yearRange = years.length > 1 ? `${years[0]}–${years.at(-1)}` : years[0];
+              return (
+                <article
+                  className={`cloud-branch cloud-branch-${direction.id}`}
+                  data-testid="research-direction-branch"
+                  key={direction.id}
+                >
+                  <div className="cloud-direction-node">
+                    <span>{String(directionIndex + 1).padStart(2, "0")}</span>
+                    <strong>{direction.label}</strong>
+                    <small>{direction.studies.length} 项 · {yearRange}</small>
+                    <p>{direction.description}</p>
+                  </div>
+                  <div className="cloud-study-chain">
+                    {direction.studies.map((study, studyIndex) => (
+                      <div className="cloud-study-node" key={`${study.year}-${studyIndex}-${study.text}`}>
+                        <time>{study.year}</time>
+                        <p>
+                          <EvidenceText text={study.text} evidence={evidence} onEvidence={onEvidence} />
+                          {/[。！？!?；;]$/.test(study.text.trim()) ? null : "。"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+      <p className="direction-map-note">从左向右阅读研究演进；云图归并基于当前报告文本，不替代证据审计。</p>
+    </section>
+  );
+}
+
 function EvidenceText({
   text,
   evidence,
@@ -622,26 +931,31 @@ function EvidenceText({
   evidence: EvidenceRecord[];
   onEvidence: (ids: string[]) => void;
 }) {
-  return text.split(/(\bevidence-\d+\b)/gi).map((part, index) => {
-    if (!/^evidence-\d+$/i.test(part)) return <span key={`${index}-${part}`}>{part}</span>;
-    const record = evidence.find((item) => {
-      const id = item.id.toLowerCase();
-      const token = part.toLowerCase();
-      return id === token || id.endsWith(`-${token}`);
+  return text
+    .split(/([（(]\s*evidence-\d+\s*[）)]|\bevidence-\d+\b)/gi)
+    .map((part, index) => {
+      const token = part.match(/\bevidence-\d+\b/i)?.[0];
+      if (!token) return <span key={`${index}-${part}`}>{part}</span>;
+      const record = evidence.find((item) => {
+        const id = item.id.toLowerCase();
+        const normalizedToken = token.toLowerCase();
+        return id === normalizedToken || id.endsWith(`-${normalizedToken}`);
+      });
+      if (!record) return <span key={`${index}-${part}`}>{part}</span>;
+      const citationNumber = token.slice(token.lastIndexOf("-") + 1);
+      return (
+        <sup className="inline-evidence-citation" key={`${index}-${part}`}>
+          <button
+            aria-label={`打开证据 ${token}`}
+            className="inline-evidence-link"
+            type="button"
+            onClick={() => onEvidence([record.id])}
+          >
+            [{citationNumber}]
+          </button>
+        </sup>
+      );
     });
-    if (!record) return <span key={`${index}-${part}`}>{part}</span>;
-    return (
-      <button
-        aria-label={`打开证据 ${part}`}
-        className="inline-evidence-link"
-        key={`${index}-${part}`}
-        type="button"
-        onClick={() => onEvidence([record.id])}
-      >
-        {part}
-      </button>
-    );
-  });
 }
 
 function ReferenceText({

@@ -9,6 +9,7 @@ use thiserror::Error;
 const CREDENTIAL_SERVICE: &str = "cn.paperpilot.desktop.model";
 const CREDENTIAL_USER: &str = "provider-api-key";
 const DEEPSEEK_PRO_MODEL: &str = "deepseek-v4-pro";
+const DEEPSEEK_FLASH_MODEL: &str = "deepseek-v4-flash";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -159,7 +160,12 @@ fn validate(input: &ModelSettingsInput) -> Result<(), ModelSettingsError> {
     if input.model.trim().is_empty() {
         return Err(ModelSettingsError::Model);
     }
-    if input.provider == "deepseek" && input.model.trim() != DEEPSEEK_PRO_MODEL {
+    if input.provider == "deepseek"
+        && !matches!(
+            input.model.trim(),
+            DEEPSEEK_FLASH_MODEL | DEEPSEEK_PRO_MODEL
+        )
+    {
         return Err(ModelSettingsError::Model);
     }
     if !allowed_endpoint(input.base_url.trim()) {
@@ -170,7 +176,10 @@ fn validate(input: &ModelSettingsInput) -> Result<(), ModelSettingsError> {
 
 fn normalized_model(provider: &str, model: &str) -> String {
     if provider == "deepseek" {
-        DEEPSEEK_PRO_MODEL.into()
+        match model.trim() {
+            DEEPSEEK_FLASH_MODEL => DEEPSEEK_FLASH_MODEL.into(),
+            _ => DEEPSEEK_PRO_MODEL.into(),
+        }
     } else {
         model.trim().to_owned()
     }
@@ -263,10 +272,14 @@ mod tests {
             model: "deepseek-v4-flash".into(),
             ..input.clone()
         };
-        assert!(validate(&flash).is_err());
+        assert!(validate(&flash).is_ok());
         assert_eq!(
             normalized_model("deepseek", "deepseek-chat"),
             "deepseek-v4-pro"
+        );
+        assert_eq!(
+            normalized_model("deepseek", "deepseek-v4-flash"),
+            "deepseek-v4-flash"
         );
         assert!(allowed_endpoint("http://localhost:11434/v1"));
         assert!(!allowed_endpoint("http://provider.example/v1"));

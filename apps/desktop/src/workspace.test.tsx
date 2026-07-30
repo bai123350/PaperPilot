@@ -89,6 +89,55 @@ describe("paperIdentifierUrl", () => {
 });
 
 describe("run controls", () => {
+  it("shows extensible add and persisted permission menus on the composer left", () => {
+    window.localStorage.removeItem("paperpilot.permissionMode");
+    render(
+      <Workspace
+        projectName="哮喘"
+        run={null}
+        messages={[]}
+        operations={[]}
+        report={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("添加"));
+    expect(screen.getByText("插件中心")).toBeInTheDocument();
+    expect(screen.getByText("后续可在这里添加插件")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("权限：替我审批"));
+    fireEvent.click(screen.getByRole("button", { name: "请求批准" }));
+    expect(document.querySelector(".permission-menu > summary")).toHaveTextContent("请求批准");
+    expect(window.localStorage.getItem("paperpilot.permissionMode")).toBe("ask");
+  });
+
+  it("lets DeepSeek users choose Flash or Pro beside the composer", () => {
+    const onModelChange = vi.fn();
+    render(
+      <Workspace
+        projectName="哮喘"
+        run={null}
+        messages={[]}
+        operations={[]}
+        report={null}
+        model="deepseek-v4-pro"
+        modelOptions={[
+          { value: "deepseek-v4-flash", label: "V4 Flash" },
+          { value: "deepseek-v4-pro", label: "V4 Pro" },
+        ]}
+        onModelChange={onModelChange}
+      />,
+    );
+
+    const selector = screen.getByRole("combobox", { name: "当前使用的模型" });
+    const send = screen.getByRole("button", { name: "发送" });
+    expect(selector).toHaveValue("deepseek-v4-pro");
+    expect(selector.closest(".composer-actions")).toContainElement(send);
+    expect(selector.closest(".composer-input")).toContainElement(send);
+    fireEvent.change(selector, { target: { value: "deepseek-v4-flash" } });
+    expect(onModelChange).toHaveBeenCalledWith("deepseek-v4-flash");
+  });
+
   it("shows a pause control beside active progress and invokes the stop handler", () => {
     const onPause = vi.fn();
     render(
@@ -356,13 +405,21 @@ describe("desktop workspace", () => {
 
     expect(screen.getByRole("heading", { name: report.title })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
-    expect(screen.getByText("2010")).toBeInTheDocument();
-    expect(screen.getByText("早期文献建立了机制假设", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("独立研究完成验证（", { exact: false })).toBeInTheDocument();
-    expect(screen.getByText("evidence-2")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "研究脉络云图" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /研究脉络云图/ })).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-testid="research-direction-branch"]').length).toBeGreaterThan(0);
+    expect(screen.getAllByText("2010").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("早期文献建立了机制假设", { exact: false }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("独立研究完成验证", { exact: false }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("（evidence-2）").length).toBeGreaterThan(0);
     expect(container.querySelectorAll(".report-timeline li:first-child .timeline-studies p")).toHaveLength(2);
-    const inlineEvidence = screen.getByRole("button", { name: "打开证据 evidence-1" });
+    const inlineEvidence = screen.getAllByRole("button", { name: "打开证据 evidence-1" })[0];
     expect(inlineEvidence).toHaveClass("inline-evidence-link");
+    expect(inlineEvidence).toHaveTextContent("[1]");
+    expect(inlineEvidence.closest("p")).not.toHaveTextContent("evidence-1");
+    expect(inlineEvidence.closest("p")).toHaveTextContent("[1]。");
+    const timelineStudies = Array.from(container.querySelectorAll(".timeline-studies p"));
+    expect(timelineStudies.every((study) => study.textContent?.endsWith("。"))).toBe(true);
     const pmidLink = screen.getByRole("link", { name: "pmid:1" });
     expect(pmidLink).toHaveAttribute(
       "href",
