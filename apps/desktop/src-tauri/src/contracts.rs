@@ -158,6 +158,18 @@ pub struct EvidenceRecord {
     pub run_id: String,
     pub paper_id: String,
     pub paper_title: String,
+    #[serde(default)]
+    pub journal: Option<String>,
+    #[serde(default)]
+    pub issn: Option<String>,
+    #[serde(default)]
+    pub impact_factor: Option<f32>,
+    #[serde(default)]
+    pub impact_factor_year: Option<u16>,
+    #[serde(default)]
+    pub impact_factor_source: Option<String>,
+    #[serde(default)]
+    pub impact_factor_url: Option<String>,
     pub excerpt: String,
     pub locator: String,
     pub evidence_type: String,

@@ -2,15 +2,17 @@ use chrono::{Datelike, Utc};
 use quick_xml::{Reader, XmlVersion, events::Event};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 use thiserror::Error;
 
 use crate::{
     CONTRACT_VERSION,
+    cancellation::CancellationToken,
     contracts::{
         Claim, ConversationMessage, EvidenceRecord, Recommendation, Report, ResearchBrief,
         validate_report,
     },
+    impact_factor::ImpactFactorLookup,
     provider_settings::ModelClientConfig,
 };
 
@@ -21,8 +23,9 @@ const PUBMED_PAGE_SIZE_QUERY: &str = "500";
 const PUBMED_MAX_RETRIEVABLE: usize = 10_000;
 const OPENALEX_PAGE_SIZE: usize = 200;
 const OPENALEX_PAGE_SIZE_QUERY: &str = "200";
-const CROSSREF_PAGE_SIZE: usize = 1_000;
-const CROSSREF_PAGE_SIZE_QUERY: &str = "1000";
+const CROSSREF_PAGE_SIZE: usize = 500;
+const CROSSREF_PAGE_SIZE_QUERY: &str = "500";
+const CROSSREF_MAX_SEARCH_RESULTS: usize = 1_000;
 const SOURCE_PAGE_DELAY_MS: u64 = 350;
 const MIN_RELEVANCE_SCORE: f32 = 7.0;
 const RANKING_BATCH_SIZE: usize = 10;
@@ -41,6 +44,8 @@ const GOOGLE_SCHOLAR: &str = "Google Scholar";
 
 #[derive(Debug, Error)]
 pub enum LiveResearchError {
+    #[error("研究运行已由用户停止。")]
+    Cancelled,
     #[error("所有文献数据库均检索失败。")]
     Search,
     #[error("文献数据库没有返回可用的相关文献摘要。")]
@@ -75,6 +80,7 @@ pub enum LiveResearchError {
 
 #[derive(Debug, Clone, Copy)]
 enum SourceSearchError {
+    Cancelled,
     Connection,
     InvalidResponse,
 }
@@ -82,6 +88,7 @@ enum SourceSearchError {
 impl std::fmt::Display for SourceSearchError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
+            Self::Cancelled => "已停止",
             Self::Connection => "连接失败",
             Self::InvalidResponse => "响应无法解析",
         })
@@ -190,6 +197,8 @@ pub struct GroundedReply {
 pub struct OpenAiResearchBackend {
     agent: ureq::Agent,
     config: ModelClientConfig,
+    impact_factors: Option<ImpactFactorLookup>,
+    cancellation: CancellationToken,
 }
 
 impl OpenAiResearchBackend {
@@ -198,7 +207,31 @@ impl OpenAiResearchBackend {
             .timeout_global(Some(std::time::Duration::from_secs(300)))
             .build()
             .into();
-        Self { agent, config }
+        Self {
+            agent,
+            config,
+            impact_factors: None,
+            cancellation: CancellationToken::default(),
+        }
+    }
+
+    pub fn with_impact_factor_cache(config: ModelClientConfig, data_dir: &Path) -> Self {
+        let mut backend = Self::new(config);
+        backend.impact_factors = Some(ImpactFactorLookup::open(data_dir));
+        backend
+    }
+
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    fn ensure_not_cancelled(&self) -> Result<(), LiveResearchError> {
+        if self.cancellation.is_cancelled() {
+            Err(LiveResearchError::Cancelled)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn check_connection(&self) -> Result<(), LiveResearchError> {
@@ -214,6 +247,7 @@ impl OpenAiResearchBackend {
     }
 
     fn complete_json(&self, system: &str, payload: Value) -> Result<Value, LiveResearchError> {
+        self.ensure_not_cancelled()?;
         let url = format!(
             "{}/chat/completions",
             self.config.base_url.trim_end_matches('/')
@@ -238,6 +272,7 @@ impl OpenAiResearchBackend {
         }
         let mut last_error = LiveResearchError::InvalidJson;
         for attempt in 0..MAX_MODEL_REQUEST_ATTEMPTS {
+            self.ensure_not_cancelled()?;
             let response = self
                 .agent
                 .post(&url)
@@ -245,6 +280,7 @@ impl OpenAiResearchBackend {
                 .send_json(request.clone());
             match response {
                 Ok(mut response) => {
+                    self.ensure_not_cancelled()?;
                     let parsed = response
                         .body_mut()
                         .read_json::<ChatCompletion>()
@@ -275,6 +311,7 @@ impl OpenAiResearchBackend {
                 }
             }
             if attempt + 1 < MAX_MODEL_REQUEST_ATTEMPTS {
+                self.ensure_not_cancelled()?;
                 std::thread::sleep(std::time::Duration::from_millis(750 * (attempt as u64 + 1)));
             }
         }
@@ -326,11 +363,14 @@ impl OpenAiResearchBackend {
         let dated_query =
             format!("({query}) AND FIRST_PDATE:[{date_from}-01-01 TO {date_to}-12-31]");
         let mut cursor = "*".to_owned();
-        let mut strict_matched_count = 0;
+        let mut keyword_matched_count = 0;
         let mut returned_count = 0;
         let mut batch_count = 0;
         let mut papers = Vec::new();
         loop {
+            if self.cancellation.is_cancelled() {
+                return Err(SourceSearchError::Cancelled);
+            }
             let mut response = self
                 .agent
                 .get("https://www.ebi.ac.uk/europepmc/webservices/rest/search")
@@ -353,9 +393,9 @@ impl OpenAiResearchBackend {
             returned_count += batch_size;
             for result in response.result_list.result {
                 if let Some(paper) = SourcePaper::from_europe_pmc(result)
-                    && source_paper_abstract_matches_query(&paper, query)
+                    && source_paper_abstract_contains_query_keyword(&paper, query)
                 {
-                    strict_matched_count += 1;
+                    keyword_matched_count += 1;
                     papers.push(paper);
                 }
             }
@@ -369,7 +409,7 @@ impl OpenAiResearchBackend {
             std::thread::sleep(std::time::Duration::from_millis(SOURCE_PAGE_DELAY_MS));
         }
         Ok(SearchResults::new(
-            strict_matched_count,
+            keyword_matched_count,
             batch_count,
             returned_count,
             papers,
@@ -385,13 +425,16 @@ impl OpenAiResearchBackend {
         let dated_query = format!(
             "({query}) AND (\"{date_from}/01/01\"[Date - Publication] : \"{date_to}/12/31\"[Date - Publication])"
         );
-        let mut strict_matched_count = 0;
+        let mut keyword_matched_count = 0;
         let mut returned_count = 0;
         let mut batch_count = 0;
         let mut reached_limit = false;
         let mut papers = Vec::new();
         let mut retstart = 0;
         loop {
+            if self.cancellation.is_cancelled() {
+                return Err(SourceSearchError::Cancelled);
+            }
             let mut response = self
                 .agent
                 .get("https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi")
@@ -434,8 +477,8 @@ impl OpenAiResearchBackend {
                 .read_to_string()
                 .map_err(|_| SourceSearchError::InvalidResponse)?;
             for paper in parse_pubmed_xml(&body)? {
-                if source_paper_abstract_matches_query(&paper, query) {
-                    strict_matched_count += 1;
+                if source_paper_abstract_contains_query_keyword(&paper, query) {
+                    keyword_matched_count += 1;
                     papers.push(paper);
                 }
             }
@@ -451,7 +494,7 @@ impl OpenAiResearchBackend {
             std::thread::sleep(std::time::Duration::from_millis(SOURCE_PAGE_DELAY_MS));
         }
         let mut results =
-            SearchResults::new(strict_matched_count, batch_count, returned_count, papers);
+            SearchResults::new(keyword_matched_count, batch_count, returned_count, papers);
         results.reached_limit = reached_limit;
         Ok(results)
     }
@@ -465,12 +508,15 @@ impl OpenAiResearchBackend {
         let filter = format!(
             "from_publication_date:{date_from}-01-01,to_publication_date:{date_to}-12-31,has_abstract:true,title_and_abstract.search:{query}"
         );
-        let mut strict_matched_count = 0;
+        let mut keyword_matched_count = 0;
         let mut returned_count = 0;
         let mut batch_count = 0;
         let mut papers = Vec::new();
         let mut cursor = "*".to_owned();
         loop {
+            if self.cancellation.is_cancelled() {
+                return Err(SourceSearchError::Cancelled);
+            }
             let mut response = self
                 .agent
                 .get("https://api.openalex.org/works")
@@ -480,7 +526,7 @@ impl OpenAiResearchBackend {
                 .query("sort", "relevance_score:desc")
                 .query(
                     "select",
-                    "id,doi,title,publication_year,ids,abstract_inverted_index",
+                    "id,doi,title,publication_year,ids,primary_location,abstract_inverted_index",
                 )
                 .call()
                 .map_err(|_| SourceSearchError::Connection)?;
@@ -496,9 +542,9 @@ impl OpenAiResearchBackend {
             returned_count += batch_size;
             for work in response.results {
                 if let Some(paper) = SourcePaper::from_openalex(work)
-                    && source_paper_abstract_matches_query(&paper, query)
+                    && source_paper_abstract_contains_query_keyword(&paper, query)
                 {
-                    strict_matched_count += 1;
+                    keyword_matched_count += 1;
                     papers.push(paper);
                 }
             }
@@ -512,7 +558,7 @@ impl OpenAiResearchBackend {
             std::thread::sleep(std::time::Duration::from_millis(SOURCE_PAGE_DELAY_MS));
         }
         Ok(SearchResults::new(
-            strict_matched_count,
+            keyword_matched_count,
             batch_count,
             returned_count,
             papers,
@@ -528,12 +574,15 @@ impl OpenAiResearchBackend {
         let filter = format!(
             "from-pub-date:{date_from}-01-01,until-pub-date:{date_to}-12-31,has-abstract:true"
         );
-        let mut strict_matched_count = 0;
+        let mut keyword_matched_count = 0;
         let mut returned_count = 0;
         let mut batch_count = 0;
         let mut papers = Vec::new();
         let mut cursor = "*".to_owned();
         loop {
+            if self.cancellation.is_cancelled() {
+                return Err(SourceSearchError::Cancelled);
+            }
             let mut response = self
                 .agent
                 .get("https://api.crossref.org/works")
@@ -542,7 +591,10 @@ impl OpenAiResearchBackend {
                 .query("rows", CROSSREF_PAGE_SIZE_QUERY)
                 .query("cursor", &cursor)
                 .query("filter", &filter)
-                .query("select", "DOI,title,abstract,published")
+                .query(
+                    "select",
+                    "DOI,title,abstract,published,container-title,ISSN",
+                )
                 .call()
                 .map_err(|_| SourceSearchError::Connection)?;
             let response: CrossrefResponse = response
@@ -557,23 +609,26 @@ impl OpenAiResearchBackend {
             returned_count += batch_size;
             for work in response.message.items {
                 if let Some(paper) = SourcePaper::from_crossref(work)
-                    && source_paper_abstract_matches_query(&paper, query)
+                    && source_paper_abstract_contains_query_keyword(&paper, query)
                 {
-                    strict_matched_count += 1;
+                    keyword_matched_count += 1;
                     papers.push(paper);
                 }
             }
             let Some(next_cursor) = response.message.next_cursor else {
                 break;
             };
-            if batch_size < CROSSREF_PAGE_SIZE || next_cursor == cursor {
+            if batch_size < CROSSREF_PAGE_SIZE
+                || next_cursor == cursor
+                || returned_count >= CROSSREF_MAX_SEARCH_RESULTS
+            {
                 break;
             }
             cursor = next_cursor;
             std::thread::sleep(std::time::Duration::from_millis(SOURCE_PAGE_DELAY_MS));
         }
         Ok(SearchResults::new(
-            strict_matched_count,
+            keyword_matched_count,
             batch_count,
             returned_count,
             papers,
@@ -586,6 +641,7 @@ impl OpenAiResearchBackend {
         brief: &ResearchBrief,
         on_trace: &mut dyn FnMut(LiveResearchTrace),
     ) -> Result<Vec<SourcePaper>, LiveResearchError> {
+        self.ensure_not_cancelled()?;
         let mut successful_sources = 0;
         let mut collected = Vec::new();
 
@@ -599,6 +655,7 @@ impl OpenAiResearchBackend {
             &mut collected,
             on_trace,
         );
+        self.ensure_not_cancelled()?;
 
         on_trace(LiveResearchTrace::SourceSearchStarted {
             source: PUBMED.into(),
@@ -610,6 +667,7 @@ impl OpenAiResearchBackend {
             &mut collected,
             on_trace,
         );
+        self.ensure_not_cancelled()?;
 
         on_trace(LiveResearchTrace::SourceSearchStarted {
             source: OPENALEX.into(),
@@ -621,6 +679,7 @@ impl OpenAiResearchBackend {
             &mut collected,
             on_trace,
         );
+        self.ensure_not_cancelled()?;
 
         on_trace(LiveResearchTrace::SourceSearchStarted {
             source: CROSSREF.into(),
@@ -632,6 +691,7 @@ impl OpenAiResearchBackend {
             &mut collected,
             on_trace,
         );
+        self.ensure_not_cancelled()?;
 
         let (date_from, date_to) = effective_date_range(brief);
         on_trace(LiveResearchTrace::ManualSourceSearchAvailable {
@@ -667,13 +727,16 @@ impl OpenAiResearchBackend {
         brief: &ResearchBrief,
         on_trace: &mut dyn FnMut(LiveResearchTrace),
     ) -> Result<Vec<EvidenceRecord>, LiveResearchError> {
+        self.ensure_not_cancelled()?;
         let query = self.build_search_query(brief)?;
         let (date_from, date_to) = effective_date_range(brief);
         on_trace(LiveResearchTrace::SearchQueryBuilt {
             query: format!("{query}\n发表时间范围：{date_from}–{date_to}"),
         });
         let candidate_papers = self.search_all_sources(&query, brief, on_trace)?;
+        self.ensure_not_cancelled()?;
         let ranked = self.rank_papers(brief, &candidate_papers, on_trace)?;
+        self.ensure_not_cancelled()?;
         let above_threshold_count = ranked
             .iter()
             .filter(|item| item.score >= MIN_RELEVANCE_SCORE)
@@ -717,6 +780,7 @@ impl OpenAiResearchBackend {
     ) -> Result<Vec<RankedPaper>, LiveResearchError> {
         let mut ranked = Vec::with_capacity(papers.len());
         for (batch_number, batch) in papers.chunks(RANKING_BATCH_SIZE).enumerate() {
+            self.ensure_not_cancelled()?;
             let batch_start = batch_number * RANKING_BATCH_SIZE;
             let indices = (batch_start..batch_start + batch.len()).collect::<Vec<_>>();
             let mut batch_ranked = self.rank_paper_subset(brief, papers, &indices)?;
@@ -853,16 +917,33 @@ impl OpenAiResearchBackend {
     ) -> Result<Vec<EvidenceRecord>, LiveResearchError> {
         let mut evidence = Vec::with_capacity(selected.len());
         for batch in selected.chunks(EVIDENCE_BATCH_SIZE) {
+            self.ensure_not_cancelled()?;
             let items = self.extract_evidence_subset(brief, papers, batch)?;
             for item in items {
+                self.ensure_not_cancelled()?;
                 let ranked = batch[item.batch_index];
                 let source = &papers[ranked.source_index];
+                let metric = self.impact_factors.as_ref().and_then(|lookup| {
+                    lookup.lookup(source.journal.as_deref(), source.issn.as_deref())
+                });
                 let evidence_number = evidence.len() + 1;
                 evidence.push(EvidenceRecord {
                     id: format!("{run_id}-evidence-{evidence_number}"),
                     run_id: run_id.into(),
                     paper_id: source.paper_id.clone(),
                     paper_title: source.title.clone(),
+                    journal: source
+                        .journal
+                        .clone()
+                        .or_else(|| metric.as_ref().map(|item| item.journal.clone())),
+                    issn: source
+                        .issn
+                        .clone()
+                        .or_else(|| metric.as_ref().map(|item| item.issn.clone())),
+                    impact_factor: metric.as_ref().map(|item| item.impact_factor),
+                    impact_factor_year: metric.as_ref().map(|item| item.data_year),
+                    impact_factor_source: metric.as_ref().map(|item| item.source.clone()),
+                    impact_factor_url: metric.as_ref().map(|item| item.source_url.clone()),
                     excerpt: source.excerpt.clone(),
                     locator: format!(
                         "abstract · {} · {}",
@@ -1165,6 +1246,8 @@ struct EuropePmcResult {
     title: Option<String>,
     abstract_text: Option<String>,
     pub_year: Option<String>,
+    journal_title: Option<String>,
+    journal_issn: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1199,6 +1282,7 @@ struct OpenAlexWork {
     publication_year: Option<u32>,
     #[serde(default)]
     ids: OpenAlexIds,
+    primary_location: Option<OpenAlexLocation>,
     abstract_inverted_index: Option<HashMap<String, Vec<usize>>>,
 }
 
@@ -1206,6 +1290,19 @@ struct OpenAlexWork {
 struct OpenAlexIds {
     doi: Option<String>,
     pmid: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAlexLocation {
+    source: Option<OpenAlexSource>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAlexSource {
+    display_name: Option<String>,
+    issn_l: Option<String>,
+    #[serde(default)]
+    issn: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1230,6 +1327,10 @@ struct CrossrefWork {
     title: Vec<String>,
     r#abstract: Option<String>,
     published: Option<CrossrefPublished>,
+    #[serde(default, rename = "container-title")]
+    container_title: Vec<String>,
+    #[serde(default, rename = "ISSN")]
+    issn: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1244,6 +1345,8 @@ struct SourcePaper {
     title: String,
     excerpt: String,
     year: Option<String>,
+    journal: Option<String>,
+    issn: Option<String>,
     sources: Vec<String>,
 }
 
@@ -1295,6 +1398,8 @@ impl SourcePaper {
             title,
             excerpt,
             year: result.pub_year,
+            journal: result.journal_title,
+            issn: result.journal_issn,
             sources: vec![EUROPE_PMC.into()],
         })
     }
@@ -1313,11 +1418,23 @@ impl SourcePaper {
             .unwrap_or_else(|| {
                 format!("openalex:{}", last_url_segment(work.id).unwrap_or_default())
             });
+        let (journal, issn) = work
+            .primary_location
+            .and_then(|location| location.source)
+            .map(|source| {
+                (
+                    source.display_name,
+                    source.issn_l.or_else(|| source.issn.into_iter().next()),
+                )
+            })
+            .unwrap_or_default();
         Some(Self {
             paper_id,
             title,
             excerpt,
             year: work.publication_year.map(|year| year.to_string()),
+            journal,
+            issn,
             sources: vec![OPENALEX.into()],
         })
     }
@@ -1339,6 +1456,8 @@ impl SourcePaper {
             title,
             excerpt,
             year,
+            journal: work.container_title.into_iter().next(),
+            issn: work.issn.into_iter().next(),
             sources: vec![CROSSREF.into()],
         })
     }
@@ -1370,6 +1489,8 @@ struct PubMedPaperBuilder {
     title: String,
     abstract_text: String,
     year: String,
+    journal: String,
+    issn: String,
 }
 
 impl PubMedPaperBuilder {
@@ -1391,6 +1512,8 @@ impl PubMedPaperBuilder {
             title,
             excerpt,
             year: (!self.year.trim().is_empty()).then(|| self.year.trim().to_owned()),
+            journal: (!self.journal.trim().is_empty()).then(|| self.journal.trim().to_owned()),
+            issn: (!self.issn.trim().is_empty()).then(|| self.issn.trim().to_owned()),
             sources: vec![PUBMED.into()],
         })
     }
@@ -1403,6 +1526,8 @@ enum PubMedField {
     Title,
     Abstract,
     Year,
+    Journal,
+    Issn,
 }
 
 fn parse_pubmed_xml(xml: &str) -> Result<Vec<SourcePaper>, SourceSearchError> {
@@ -1428,6 +1553,8 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<SourcePaper>, SourceSearchError> {
                         field = Some(PubMedField::Abstract);
                     }
                     b"Year" if current.is_some() => field = Some(PubMedField::Year),
+                    b"Title" if current.is_some() => field = Some(PubMedField::Journal),
+                    b"ISSN" if current.is_some() => field = Some(PubMedField::Issn),
                     b"ArticleId" if current.is_some() => {
                         let is_doi = event.attributes().flatten().any(|attribute| {
                             attribute.key.as_ref() == b"IdType"
@@ -1457,6 +1584,12 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<SourcePaper>, SourceSearchError> {
                         PubMedField::Year if builder.year.is_empty() => {
                             builder.year.push_str(&value)
                         }
+                        PubMedField::Journal if builder.journal.is_empty() => {
+                            builder.journal.push_str(&value)
+                        }
+                        PubMedField::Issn if builder.issn.is_empty() => {
+                            builder.issn.push_str(&value)
+                        }
                         _ => {}
                     }
                 }
@@ -1468,7 +1601,8 @@ fn parse_pubmed_xml(xml: &str) -> Result<Vec<SourcePaper>, SourceSearchError> {
                     }
                     field = None;
                 }
-                b"PMID" | b"ArticleTitle" | b"AbstractText" | b"Year" | b"ArticleId" => {
+                b"PMID" | b"ArticleTitle" | b"AbstractText" | b"Year" | b"Title" | b"ISSN"
+                | b"ArticleId" => {
                     field = None;
                 }
                 _ => {}
@@ -1534,16 +1668,16 @@ fn strip_markup(value: &str) -> String {
         .join(" ")
 }
 
-fn source_paper_abstract_matches_query(paper: &SourcePaper, query: &str) -> bool {
-    text_matches_boolean_query(&paper.excerpt, query)
+fn source_paper_abstract_contains_query_keyword(paper: &SourcePaper, query: &str) -> bool {
+    text_contains_any_query_keyword(&paper.excerpt, query)
 }
 
-fn text_matches_boolean_query(text: &str, query: &str) -> bool {
+fn text_contains_any_query_keyword(text: &str, query: &str) -> bool {
     let searchable = normalize_search_text(text);
     let groups = boolean_query_groups(query);
     !searchable.is_empty()
         && !groups.is_empty()
-        && groups.iter().all(|alternatives| {
+        && groups.iter().any(|alternatives| {
             alternatives.iter().any(|term| {
                 let normalized = normalize_search_text(term);
                 !normalized.is_empty() && search_text_contains(&searchable, &normalized)
@@ -1755,6 +1889,12 @@ fn merge_duplicate_papers(papers: Vec<SourcePaper>) -> Vec<SourcePaper> {
             }
             if paper.excerpt.chars().count() > current.excerpt.chars().count() {
                 current.excerpt = paper.excerpt;
+            }
+            if current.journal.is_none() {
+                current.journal = paper.journal;
+            }
+            if current.issn.is_none() {
+                current.issn = paper.issn;
             }
             by_id.insert(id, index);
             by_title.insert(title, index);
@@ -2134,13 +2274,13 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        CROSSREF, CROSSREF_PAGE_SIZE, CrossrefResponse, CrossrefWork, EUROPE_PMC,
-        EUROPE_PMC_PAGE_SIZE, EuropePmcResponse, LiveResearchError, OPENALEX_PAGE_SIZE,
+        CROSSREF, CROSSREF_MAX_SEARCH_RESULTS, CROSSREF_PAGE_SIZE, CrossrefResponse, CrossrefWork,
+        EUROPE_PMC, EUROPE_PMC_PAGE_SIZE, EuropePmcResponse, LiveResearchError, OPENALEX_PAGE_SIZE,
         OpenAlexResponse, PUBMED, SourcePaper, boolean_query_groups, classify_model_error,
         fallback_search_query, google_scholar_search_url, merge_duplicate_papers,
         parse_confidence_value, parse_json_content, parse_pubmed_xml, parse_score_value,
         parse_search_query_value, parse_usize_value, reconstruct_openalex_abstract,
-        source_paper_abstract_matches_query, truncate_chars,
+        source_paper_abstract_contains_query_keyword, truncate_chars,
     };
     use serde_json::json;
 
@@ -2201,7 +2341,7 @@ mod tests {
                 <PMID>12345</PMID><Article><ArticleTitle>A useful paper</ArticleTitle>
                 <Abstract><AbstractText Label="BACKGROUND">First section.</AbstractText>
                 <AbstractText>Second section.</AbstractText></Abstract>
-                <Journal><JournalIssue><PubDate><Year>2025</Year></PubDate></JournalIssue></Journal>
+                <Journal><ISSN IssnType="Print">0028-0836</ISSN><JournalIssue><PubDate><Year>2025</Year></PubDate></JournalIssue><Title>Nature</Title></Journal>
                 </Article></MedlineCitation><PubmedData><ArticleIdList>
                 <ArticleId IdType="doi">10.1000/Test</ArticleId>
                 </ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>"#,
@@ -2210,6 +2350,8 @@ mod tests {
         assert_eq!(papers.len(), 1);
         assert_eq!(papers[0].paper_id, "pmid:12345");
         assert_eq!(papers[0].excerpt, "First section. Second section.");
+        assert_eq!(papers[0].journal.as_deref(), Some("Nature"));
+        assert_eq!(papers[0].issn.as_deref(), Some("0028-0836"));
         assert_eq!(papers[0].sources, vec![PUBMED]);
     }
 
@@ -2256,7 +2398,8 @@ mod tests {
         );
         assert_eq!(EUROPE_PMC_PAGE_SIZE, 1_000);
         assert_eq!(OPENALEX_PAGE_SIZE, 200);
-        assert_eq!(CROSSREF_PAGE_SIZE, 1_000);
+        assert_eq!(CROSSREF_PAGE_SIZE, 500);
+        assert_eq!(CROSSREF_MAX_SEARCH_RESULTS, 1_000);
     }
 
     #[test]
@@ -2337,52 +2480,61 @@ mod tests {
     }
 
     #[test]
-    fn crossref_results_must_match_every_boolean_concept_group() {
+    fn crossref_results_are_included_when_the_abstract_contains_a_query_keyword() {
         let relevant = CrossrefWork {
             doi: Some("10.1000/relevant".into()),
             title: vec!["PD-1 blockade resistance in melanoma".into()],
             r#abstract: Some("PD-1 mechanisms of refractory disease.".into()),
             published: None,
+            container_title: vec!["Cancer Research".into()],
+            issn: vec!["0008-5472".into()],
         };
         let broad_but_irrelevant = CrossrefWork {
             doi: Some("10.1000/irrelevant".into()),
             title: vec!["Treatment resistance in melanoma".into()],
             r#abstract: Some("A broad oncology review.".into()),
             published: None,
+            container_title: vec![],
+            issn: vec![],
         };
         let query = r#"("PD-1" OR "programmed death 1") AND (resistance OR refractory)"#;
 
-        assert!(source_paper_abstract_matches_query(
+        assert!(source_paper_abstract_contains_query_keyword(
             &SourcePaper::from_crossref(relevant).unwrap(),
             query
         ));
-        assert!(!source_paper_abstract_matches_query(
+        assert!(!source_paper_abstract_contains_query_keyword(
             &SourcePaper::from_crossref(broad_but_irrelevant).unwrap(),
             query
         ));
     }
 
     #[test]
-    fn every_source_paper_must_match_each_group_in_the_author_abstract() {
+    fn source_papers_are_included_when_the_abstract_contains_any_query_keyword() {
         let paper = SourcePaper {
             paper_id: "openalex:W1".into(),
             title: "PD-1 blockade in melanoma".into(),
-            excerpt: "PD-1 acquired resistance limits durable response.".into(),
+            excerpt: "Acquired resistance limits durable response.".into(),
             year: Some("2025".into()),
+            journal: Some("Example Journal".into()),
+            issn: Some("1234-5678".into()),
             sources: vec!["OpenAlex".into()],
         };
         let query = r#"("PD-1" OR "programmed death 1") AND (resistance OR refractory)"#;
 
-        assert!(source_paper_abstract_matches_query(&paper, query));
-        assert!(!source_paper_abstract_matches_query(
+        assert!(source_paper_abstract_contains_query_keyword(&paper, query));
+        assert!(!source_paper_abstract_contains_query_keyword(
             &paper,
-            r#"(CTLA-4) AND (resistance)"#
+            r#"(CTLA-4) AND (ipilimumab)"#
         ));
         let title_only = SourcePaper {
-            excerpt: "Acquired resistance limits durable response.".into(),
+            excerpt: "Durable response was evaluated.".into(),
             ..paper
         };
-        assert!(!source_paper_abstract_matches_query(&title_only, query));
+        assert!(!source_paper_abstract_contains_query_keyword(
+            &title_only,
+            query
+        ));
     }
 
     #[test]
@@ -2401,6 +2553,8 @@ mod tests {
                 title: "Shared title".into(),
                 excerpt: "Short abstract.".into(),
                 year: Some("2024".into()),
+                journal: None,
+                issn: None,
                 sources: vec![EUROPE_PMC.into()],
             },
             SourcePaper {
@@ -2408,6 +2562,8 @@ mod tests {
                 title: "A different provider title".into(),
                 excerpt: "A longer abstract returned by the second database.".into(),
                 year: Some("2024".into()),
+                journal: Some("Shared Journal".into()),
+                issn: Some("1234-5678".into()),
                 sources: vec![CROSSREF.into()],
             },
         ]);

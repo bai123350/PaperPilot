@@ -1,8 +1,10 @@
 pub mod attachments;
+pub mod cancellation;
 pub mod commands;
 pub mod contracts;
 pub mod crypto;
 pub mod gateway;
+pub mod impact_factor;
 pub mod key_management;
 pub mod live_research;
 pub mod pdf_parser;

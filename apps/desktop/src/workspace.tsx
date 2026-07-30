@@ -11,6 +11,7 @@ import {
   RotateCcw,
   Send,
   Settings,
+  Square,
   UserRound,
   X,
 } from "lucide-react";
@@ -40,6 +41,8 @@ interface WorkspaceProps {
   onExport?: (format: ExportFormat) => Promise<void> | void;
   failureReason?: string | null;
   onRetry?: () => Promise<void> | void;
+  onPause?: () => Promise<void> | void;
+  pausePending?: boolean;
   onOpenSettings?: () => void;
   rerunDraft?: ResearchBrief | null;
   onPrepareRerun?: () => void;
@@ -67,6 +70,8 @@ export function Workspace({
   onExport,
   failureReason,
   onRetry,
+  onPause,
+  pausePending = false,
   onOpenSettings,
   rerunDraft = null,
   onPrepareRerun,
@@ -89,6 +94,9 @@ export function Workspace({
   const [briefError, setBriefError] = useState<string | null>(null);
   const timelineEnd = useRef<HTMLDivElement>(null);
   const canCompose = !run || run.status === "completed";
+  const canPause = Boolean(
+    run && ["queued", "running", "waiting", "retrying"].includes(run.status),
+  );
   const currentTimeline = useMemo<TimelineEntry[]>(
     () => createTimeline(messages, operations),
     [messages, operations],
@@ -177,6 +185,18 @@ export function Workspace({
                   ? `${run.status === "completed" ? "报告" : "运行"} ${run.progress}%`
                   : "准备开始"}
             </span>
+            {canPause && onPause ? (
+              <button
+                className="pause-run-button"
+                type="button"
+                disabled={pausePending}
+                title="停止整个研究任务"
+                onClick={() => void onPause()}
+              >
+                <Square size={12} fill="currentColor" aria-hidden="true" />
+                {pausePending ? "正在停止" : "暂停运行"}
+              </button>
+            ) : null}
           </div>
         </header>
 
@@ -316,6 +336,12 @@ export function Workspace({
               </button>
             </div>
           </div>
+        ) : run?.status === "cancelled" ? (
+          <div className="report-waiting report-stopped" role="status">
+            <span><Square size={23} fill="currentColor" aria-hidden="true" /></span>
+            <h2>研究运行已停止</h2>
+            <p>整个研究任务已终止，未继续检索、证据抽取或生成报告。</p>
+          </div>
         ) : (
           <div className="report-waiting">
             <span><FileText size={26} aria-hidden="true" /></span>
@@ -357,7 +383,7 @@ function TimelineItems({
         <span className="operation-icon">
           {entry.value.status === "completed" ? (
             <CheckCircle2 size={16} aria-hidden="true" />
-          ) : entry.value.status === "failed" ? (
+          ) : entry.value.status === "failed" || entry.value.status === "cancelled" ? (
             <X size={16} aria-hidden="true" />
           ) : (
             <Clock3 size={16} aria-hidden="true" />
@@ -371,7 +397,9 @@ function TimelineItems({
                 ? "完成"
                 : entry.value.status === "failed"
                   ? "失败"
-                  : "执行中"}
+                  : entry.value.status === "cancelled"
+                    ? "已停止"
+                    : "执行中"}
             </span>
           </header>
           <p><OperationText text={entry.value.summary} /></p>
@@ -512,7 +540,45 @@ function ReportDocument({
         </div>
       </ReportSection>
       <ReportSection title="参考文献">
-        <ol>{report.references.map((item) => <li key={item}><ReferenceText reference={item} evidence={report.evidence} /></li>)}</ol>
+        <div className="reference-table-wrap">
+          <table className="reference-table">
+            <thead>
+              <tr><th>文献</th><th>期刊</th><th>ISSN</th><th>影响因子</th></tr>
+            </thead>
+            <tbody>
+              {report.references.map((item, index) => {
+                const record = report.evidence.find((evidence) => item.endsWith(`(${evidence.paperId})`));
+                return (
+                  <tr key={`${index}-${item}`}>
+                    <td><span className="reference-index">{index + 1}.</span> <ReferenceText reference={item} evidence={report.evidence} /></td>
+                    <td>{record?.journal ?? "未获取"}</td>
+                    <td>{record?.issn ?? "—"}</td>
+                    <td>
+                      {record?.impactFactor != null ? (
+                        record.impactFactorUrl ? (
+                          <a
+                            className="metric-link"
+                            href={record.impactFactorUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={`${record.impactFactorSource ?? "LetPub 参考值"} · ${record.impactFactorYear ?? "查询年份未知"}`}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              void openUrl(record.impactFactorUrl!);
+                            }}
+                          >
+                            {record.impactFactor}
+                          </a>
+                        ) : record.impactFactor
+                      ) : "未匹配"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="metric-note">影响因子来自 LetPub 公开查询页，仅作参考；点击蓝色数值可核验来源。</p>
       </ReportSection>
       <footer className="report-disclaimer">{report.disclaimer}</footer>
     </article>
@@ -637,7 +703,7 @@ function EvidenceDrawer({ evidence, onClose }: { evidence: EvidenceRecord; onClo
     <aside className="evidence-drawer" aria-label="证据详情">
       <header><div><span className="pane-kicker">Evidence Record</span><h2>{evidence.paperTitle}</h2></div><button type="button" onClick={onClose} aria-label="关闭证据"><X size={18} /></button></header>
       <blockquote>{evidence.excerpt}</blockquote>
-      <dl><div><dt>定位</dt><dd>{evidence.locator}</dd></div><div><dt>论文标识</dt><dd><PaperIdentifier paperId={evidence.paperId} /></dd></div><div><dt>证据类型</dt><dd>{evidence.evidenceType}</dd></div><div><dt>置信度</dt><dd>{Math.round(evidence.confidence * 100)}%</dd></div></dl>
+      <dl><div><dt>定位</dt><dd>{evidence.locator}</dd></div><div><dt>论文标识</dt><dd><PaperIdentifier paperId={evidence.paperId} /></dd></div><div><dt>期刊</dt><dd>{evidence.journal ?? "未获取"}{evidence.issn ? `（${evidence.issn}）` : ""}</dd></div><div><dt>影响因子</dt><dd>{evidence.impactFactor ?? "未匹配"}{evidence.impactFactorSource ? ` · ${evidence.impactFactorSource}` : ""}</dd></div><div><dt>证据类型</dt><dd>{evidence.evidenceType}</dd></div><div><dt>置信度</dt><dd>{Math.round(evidence.confidence * 100)}%</dd></div></dl>
     </aside>
   );
 }

@@ -186,19 +186,29 @@ fn spawn_run(app: AppHandle, run_id: String) {
     tauri::async_runtime::spawn_blocking(move || {
         let emitter = app.clone();
         let service = app.state::<DesktopService>();
+        let cancellation = service.cancellation_token(&run_id);
         let result = app
             .state::<ModelSettingsStore>()
             .client_config()
             .map_err(safe_error)
             .and_then(|config| {
-                let backend = OpenAiResearchBackend::new(config);
+                let data_dir = app.path().app_data_dir().map_err(safe_error)?;
+                let backend = OpenAiResearchBackend::with_impact_factor_cache(config, &data_dir)
+                    .with_cancellation(cancellation);
                 service
                     .execute_live_run_with_events(&run_id, &backend, |event| {
                         let _ = emitter.emit("paperpilot://run-event", event);
                     })
                     .map_err(safe_error)
             });
+        service.release_cancellation(&run_id);
         if let Err(reason) = result {
+            if service
+                .get_run_snapshot(&run_id)
+                .is_ok_and(|snapshot| snapshot.run.status == crate::contracts::RunStatus::Cancelled)
+            {
+                return;
+            }
             let summary = format!("研究运行失败：{reason}");
             let sequence = service
                 .get_run_snapshot(&run_id)

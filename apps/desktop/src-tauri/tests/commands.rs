@@ -47,6 +47,11 @@ fn desktop_service_exposes_the_local_project_run_report_and_delete_flow() {
     assert!(export.content.contains("## 主题版图"));
     assert!(export.content.contains("## 三个下一步方案"));
     assert!(export.content.contains("## 参考文献"));
+    assert!(
+        export
+            .content
+            .contains("| 序号 | 文献 | 期刊 | ISSN | 影响因子 |")
+    );
     assert!(export.content.contains("仅供科研用途"));
 
     let print_export = service
@@ -55,6 +60,7 @@ fn desktop_service_exposes_the_local_project_run_report_and_delete_flow() {
     assert!(print_export.content.contains("<h2>主要结论</h2>"));
     assert!(print_export.content.contains("<h2>三个下一步方案</h2>"));
     assert!(print_export.content.contains("<h2>参考文献</h2>"));
+    assert!(print_export.content.contains("<th>影响因子</th>"));
 
     service.delete_project(&project.id).unwrap();
     assert!(service.list_projects().unwrap().is_empty());
@@ -99,4 +105,33 @@ fn queued_runs_emit_each_persisted_stage_before_the_completed_report() {
     assert!(events[..9].iter().all(|event| event.operation.is_some()));
     assert_eq!(events[9].status, RunStatus::Completed);
     assert!(events[9].operation.is_none());
+}
+
+#[test]
+fn cancelling_a_run_signals_the_active_worker_token() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = DesktopService::open_for_test(directory.path(), [11_u8; 32]).unwrap();
+    let project = service.create_project("可停止研究", "").unwrap();
+    let run = service
+        .queue_run(
+            &project.id,
+            ResearchBrief {
+                question: "验证停止信号".into(),
+                population: None,
+                intervention: None,
+                comparison: None,
+                outcomes: vec![],
+                keywords: vec![],
+                date_from: None,
+                date_to: None,
+                study_types: vec![],
+            },
+        )
+        .unwrap();
+    let token = service.cancellation_token(&run.id);
+
+    let cancelled = service.cancel_run(&run.id).unwrap();
+
+    assert_eq!(cancelled.status, RunStatus::Cancelled);
+    assert!(token.is_cancelled());
 }

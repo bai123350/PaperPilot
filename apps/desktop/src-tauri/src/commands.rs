@@ -1,8 +1,9 @@
-use std::{fs, path::Path};
+use std::{collections::HashMap, fs, path::Path, sync::Mutex};
 
 use thiserror::Error;
 
 use crate::{
+    cancellation::CancellationToken,
     contracts::{
         EvidenceRecord, ExportFormat, ExportResult, MessageResult, Project, Report, ResearchBrief,
         ResearchRun, RunEvent, RunSnapshot,
@@ -24,6 +25,7 @@ pub enum CommandError {
 
 pub struct DesktopService {
     engine: ResearchEngine,
+    cancellations: Mutex<HashMap<String, CancellationToken>>,
 }
 
 impl DesktopService {
@@ -36,6 +38,7 @@ impl DesktopService {
         let store = LocalStore::open(&data_dir.join("paperpilot.db"), key)?;
         Ok(Self {
             engine: ResearchEngine::new(store),
+            cancellations: Mutex::new(HashMap::new()),
         })
     }
 
@@ -144,7 +147,23 @@ impl DesktopService {
     }
 
     pub fn cancel_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
+        self.cancellation_token(run_id).cancel();
         Ok(self.engine.cancel_run(run_id)?)
+    }
+
+    pub fn cancellation_token(&self, run_id: &str) -> CancellationToken {
+        self.cancellations
+            .lock()
+            .expect("run cancellation registry is poisoned")
+            .entry(run_id.into())
+            .or_default()
+            .clone()
+    }
+
+    pub fn release_cancellation(&self, run_id: &str) {
+        if let Ok(mut cancellations) = self.cancellations.lock() {
+            cancellations.remove(run_id);
+        }
     }
 
     pub fn resume_run(&self, run_id: &str) -> Result<ResearchRun, CommandError> {
@@ -249,7 +268,7 @@ fn report_markdown(report: &Report) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    let references = markdown_list(&report.references);
+    let references = markdown_reference_table(report);
     format!(
         "# {}\n\n{}\n\n## 进展时间线\n\n{}\n\n## 主题版图\n\n{}\n\n## 主要结论\n\n{}\n\n## 争议与局限\n\n{}\n\n## 研究空白\n\n{}\n\n## 三个下一步方案\n\n{}\n\n## 参考文献\n\n{}\n\n---\n\n{}",
         report.title,
@@ -303,7 +322,7 @@ fn report_print_html(report: &Report) -> String {
         })
         .collect::<String>();
     format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>{}</title><style>body{{max-width:920px;margin:40px auto;font:15px/1.7 system-ui;color:#26342d}}h1,h2{{line-height:1.25}}section{{margin:32px 0}}article{{break-inside:avoid;border:1px solid #d9e0dc;padding:16px;margin:12px 0}}dt{{font-weight:700}}dd{{margin:0 0 8px}}footer{{margin-top:40px;padding-top:20px;border-top:1px solid #d9e0dc;color:#68756e}}</style></head><body><h1>{}</h1><p>{}</p><section><h2>进展时间线</h2>{}</section><section><h2>主题版图</h2>{}</section><section><h2>主要结论</h2><ul>{}</ul></section><section><h2>争议与局限</h2>{}{}</section><section><h2>研究空白</h2>{}</section><section><h2>三个下一步方案</h2>{}</section><section><h2>参考文献</h2>{}</section><footer>{}</footer></body></html>",
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>{}</title><style>body{{max-width:920px;margin:40px auto;font:15px/1.7 system-ui;color:#26342d}}h1,h2{{line-height:1.25}}section{{margin:32px 0}}article{{break-inside:avoid;border:1px solid #d9e0dc;padding:16px;margin:12px 0}}dt{{font-weight:700}}dd{{margin:0 0 8px}}table{{width:100%;border-collapse:collapse;font-size:12px}}th,td{{padding:8px;border:1px solid #d9e0dc;text-align:left;vertical-align:top}}th{{background:#f2f5f3}}footer{{margin-top:40px;padding-top:20px;border-top:1px solid #d9e0dc;color:#68756e}}</style></head><body><h1>{}</h1><p>{}</p><section><h2>进展时间线</h2>{}</section><section><h2>主题版图</h2>{}</section><section><h2>主要结论</h2><ul>{}</ul></section><section><h2>争议与局限</h2>{}{}</section><section><h2>研究空白</h2>{}</section><section><h2>三个下一步方案</h2>{}</section><section><h2>参考文献</h2>{}</section><footer>{}</footer></body></html>",
         escape_html(&report.title),
         escape_html(&report.title),
         escape_html(&report.summary),
@@ -314,8 +333,77 @@ fn report_print_html(report: &Report) -> String {
         html_list(&report.limitations),
         html_list(&report.gaps),
         recommendations,
-        html_list(&report.references),
+        html_reference_table(report),
         escape_html(&report.disclaimer)
+    )
+}
+
+fn markdown_reference_table(report: &Report) -> String {
+    if report.references.is_empty() {
+        return "- 暂无".into();
+    }
+    let rows = report
+        .references
+        .iter()
+        .enumerate()
+        .map(|(index, reference)| {
+            let evidence = report.evidence.get(index);
+            let journal = evidence
+                .and_then(|item| item.journal.as_deref())
+                .unwrap_or("未获取");
+            let issn = evidence
+                .and_then(|item| item.issn.as_deref())
+                .unwrap_or("—");
+            let impact_factor = evidence
+                .and_then(|item| item.impact_factor)
+                .map_or_else(|| "未匹配".into(), |value| value.to_string());
+            format!(
+                "| {} | {} | {} | {} | {} |",
+                index + 1,
+                reference.replace('|', "\\|"),
+                journal.replace('|', "\\|"),
+                issn,
+                impact_factor
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "| 序号 | 文献 | 期刊 | ISSN | 影响因子 |\n| ---: | --- | --- | --- | ---: |\n{rows}\n\n> 影响因子来自 LetPub 公开查询页，仅作参考。"
+    )
+}
+
+fn html_reference_table(report: &Report) -> String {
+    if report.references.is_empty() {
+        return "<p>暂无</p>".into();
+    }
+    let rows = report
+        .references
+        .iter()
+        .enumerate()
+        .map(|(index, reference)| {
+            let evidence = report.evidence.get(index);
+            let journal = evidence
+                .and_then(|item| item.journal.as_deref())
+                .unwrap_or("未获取");
+            let issn = evidence
+                .and_then(|item| item.issn.as_deref())
+                .unwrap_or("—");
+            let impact_factor = evidence
+                .and_then(|item| item.impact_factor)
+                .map_or_else(|| "未匹配".into(), |value| value.to_string());
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                index + 1,
+                escape_html(reference),
+                escape_html(journal),
+                escape_html(issn),
+                escape_html(&impact_factor)
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<table><thead><tr><th>序号</th><th>文献</th><th>期刊</th><th>ISSN</th><th>影响因子</th></tr></thead><tbody>{rows}</tbody></table><p><small>影响因子来自 LetPub 公开查询页，仅作参考。</small></p>"
     )
 }
 

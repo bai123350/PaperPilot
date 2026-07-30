@@ -230,6 +230,12 @@ impl LiveResearchBackend for FakeLiveBackend {
             run_id: run_id.into(),
             paper_id: "pmid:live-1".into(),
             paper_title: "Retrieved biomedical paper".into(),
+            journal: Some("Example Journal".into()),
+            issn: Some("1234-5678".into()),
+            impact_factor: None,
+            impact_factor_year: None,
+            impact_factor_source: None,
+            impact_factor_url: None,
             excerpt: "A real retrieved abstract excerpt.".into(),
             locator: "abstract".into(),
             evidence_type: "cohort".into(),
@@ -432,7 +438,7 @@ fn live_pipeline_uses_the_configured_backend_for_report_and_follow_up() {
     assert!(
         snapshot.operations[1]
             .summary
-            .contains("摘要关键词匹配 6 篇")
+            .contains("摘要关键词命中并纳入评分 6 篇")
     );
     assert!(
         snapshot.operations[1]
@@ -442,7 +448,7 @@ fn live_pipeline_uses_the_configured_backend_for_report_and_follow_up() {
     assert!(
         snapshot.operations[1]
             .summary
-            .contains("摘要关键词匹配 73 篇")
+            .contains("摘要关键词命中并纳入评分 73 篇")
     );
     assert!(!snapshot.operations[1].summary.contains("候选总数"));
     assert!(

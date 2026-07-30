@@ -32,6 +32,7 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [report, setReport] = useState<Report | null>(null);
   const [pending, setPending] = useState(false);
+  const [stoppingRun, setStoppingRun] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [modelSettings, setModelSettings] = useState<ModelSettings | null>(null);
@@ -305,6 +306,27 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
     }
   }
 
+  async function pauseResearch() {
+    if (
+      !snapshot
+      || !["queued", "running", "waiting", "retrying"].includes(snapshot.run.status)
+      || !bridge.cancelRun
+      || stoppingRun
+    ) {
+      return;
+    }
+    setStoppingRun(true);
+    setError(null);
+    try {
+      await bridge.cancelRun(snapshot.run.id);
+      await refreshRun(snapshot.run.id);
+    } catch (reason) {
+      showError(reason);
+    } finally {
+      setStoppingRun(false);
+    }
+  }
+
   async function refreshRun(runId: string) {
     const next = await bridge.getRunSnapshot(runId);
     setSnapshot(next);
@@ -440,6 +462,8 @@ export function App({ bridge = tauriBridge }: { bridge?: DesktopBridge }) {
             onExport={exportReport}
             failureReason={runFailure}
             onRetry={retryResearch}
+            onPause={pauseResearch}
+            pausePending={stoppingRun}
             onOpenSettings={openSettings}
             rerunDraft={rerunDraft}
             onPrepareRerun={prepareRerun}

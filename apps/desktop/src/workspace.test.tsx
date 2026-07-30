@@ -45,6 +45,12 @@ const report: Report = {
       runId: "run-1",
       paperId: "pmid:1",
       paperTitle: "Evidence paper",
+      journal: null,
+      issn: null,
+      impactFactor: null,
+      impactFactorYear: null,
+      impactFactorSource: null,
+      impactFactorUrl: null,
       excerpt: "可追溯的原文证据片段。",
       locator: "page 2",
       evidenceType: "observational",
@@ -79,6 +85,64 @@ describe("paperIdentifierUrl", () => {
     expect(paperIdentifierUrl("doi:10.1000/example")).toBe(
       "https://doi.org/10.1000/example",
     );
+  });
+});
+
+describe("run controls", () => {
+  it("shows a pause control beside active progress and invokes the stop handler", () => {
+    const onPause = vi.fn();
+    render(
+      <Workspace
+        projectName="哮喘"
+        run={{
+          id: "run-active",
+          projectId: "project-1",
+          status: "running",
+          stage: "screen",
+          progress: 33,
+          reportVersion: 0,
+          createdAt: "2026-07-30T00:00:00Z",
+          updatedAt: "2026-07-30T00:01:00Z",
+          completedAt: null,
+        }}
+        messages={[]}
+        operations={[]}
+        report={null}
+        onPause={onPause}
+      />,
+    );
+
+    const progress = screen.getByText("运行 33%");
+    const pause = screen.getByRole("button", { name: "暂停运行" });
+    expect(progress.parentElement).toContainElement(pause);
+    expect(progress.nextElementSibling).toBe(pause);
+    fireEvent.click(pause);
+    expect(onPause).toHaveBeenCalledOnce();
+  });
+
+  it("shows a terminal stopped state after cancellation", () => {
+    render(
+      <Workspace
+        projectName="哮喘"
+        run={{
+          id: "run-cancelled",
+          projectId: "project-1",
+          status: "cancelled",
+          stage: "screen",
+          progress: 33,
+          reportVersion: 0,
+          createdAt: "2026-07-30T00:00:00Z",
+          updatedAt: "2026-07-30T00:01:00Z",
+          completedAt: null,
+        }}
+        messages={[]}
+        operations={[]}
+        report={null}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "研究运行已停止" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "暂停运行" })).not.toBeInTheDocument();
   });
 });
 
@@ -275,6 +339,15 @@ describe("desktop workspace", () => {
             "2010：早期文献建立了机制假设（evidence-1）；独立研究完成验证（evidence-2）。",
             "2026：最新研究完成多模态验证。",
           ],
+          evidence: report.evidence.map((item) => ({
+            ...item,
+            journal: "Nature",
+            issn: "0028-0836",
+            impactFactor: 56.1,
+            impactFactorYear: 2026,
+            impactFactorSource: "LetPub（参考值）",
+            impactFactorUrl: "https://www.letpub.com.cn/index.php?page=journalapp&view=search&searchissn=0028-0836",
+          })),
           references: ["Evidence paper (pmid:1)"],
         }}
         onExport={onExport}
@@ -301,6 +374,13 @@ describe("desktop workspace", () => {
     expect(screen.getByLabelText("证据详情")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "主题版图" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "参考文献" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "影响因子" })).toBeInTheDocument();
+    expect(screen.getByText("0028-0836")).toBeInTheDocument();
+    const metricLink = screen.getByRole("link", { name: "56.1" });
+    fireEvent.click(metricLink);
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://www.letpub.com.cn/index.php?page=journalapp&view=search&searchissn=0028-0836",
+    );
     expect(screen.getAllByTestId("recommendation-card")).toHaveLength(3);
     expect(screen.getByLabelText("继续研究对话")).toBeEnabled();
     fireEvent.click(screen.getAllByRole("button", { name: "查看 1 条证据" })[0]);

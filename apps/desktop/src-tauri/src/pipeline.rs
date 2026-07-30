@@ -102,6 +102,23 @@ impl ResearchEngine {
 
     pub fn cancel_run(&self, run_id: &str) -> Result<ResearchRun, PipelineError> {
         let run = self.store.get_run(run_id)?;
+        if !matches!(
+            run.status,
+            RunStatus::Queued | RunStatus::Running | RunStatus::Waiting | RunStatus::Retrying
+        ) {
+            return Err(PipelineError::InvalidState);
+        }
+        if let Some(mut operation) = self
+            .store
+            .list_operations(run_id)?
+            .into_iter()
+            .rev()
+            .find(|operation| operation.status == "running")
+        {
+            operation.status = "cancelled".into();
+            operation.summary = format!("{}\n任务已由用户停止。", operation.summary.trim());
+            self.store.save_operation(&operation)?;
+        }
         Ok(self.store.update_run(
             run_id,
             RunStatus::Cancelled,
@@ -398,7 +415,7 @@ impl ResearchEngine {
                     unique_count,
                     reached_limit,
                 } => {
-                    let match_summary = format!("摘要关键词匹配 {matched_count} 篇");
+                    let match_summary = format!("摘要关键词命中并纳入评分 {matched_count} 篇");
                     let detail = format!(
                         "{source}：按相关性排序读取 {batch_count} 批，累计 {returned_count} 篇；{match_summary}，可用摘要 {usable_count} 篇，源内唯一 {unique_count} 篇{}",
                         if reached_limit {
@@ -578,6 +595,10 @@ impl ResearchEngine {
         if let Some(error) = trace_error {
             return Err(error);
         }
+        let current = self.store.get_run(run_id)?;
+        if current.status != RunStatus::Running {
+            return Ok(current);
+        }
         let evidence = evidence_result?;
         let fallback_summaries = [
             "模型已完成研究问题结构化。",
@@ -613,7 +634,12 @@ impl ResearchEngine {
             "running",
             &mut on_event,
         )?;
-        let report = backend.synthesize_report(run_id, 1, &brief, &evidence, None)?;
+        let report_result = backend.synthesize_report(run_id, 1, &brief, &evidence, None);
+        let current = self.store.get_run(run_id)?;
+        if current.status != RunStatus::Running {
+            return Ok(current);
+        }
+        let report = report_result?;
         self.record_live_stage(
             run_id,
             6,
@@ -657,6 +683,10 @@ impl ResearchEngine {
             &mut on_event,
         )?;
 
+        let current = self.store.get_run(run_id)?;
+        if current.status != RunStatus::Running {
+            return Ok(current);
+        }
         let completion_sequence = self.store.next_timeline_sequence(run_id)?;
         self.store.save_message(&ConversationMessage {
             id: Uuid::new_v4().to_string(),
@@ -705,6 +735,9 @@ impl ResearchEngine {
     where
         F: FnMut(RunEvent),
     {
+        if self.store.get_run(run_id)?.status != RunStatus::Running {
+            return Ok(());
+        }
         let (kind, title, _) = STAGES[index];
         let sequence = index as u64 + 1;
         let progress = if status == "completed" {
@@ -1035,6 +1068,12 @@ fn demo_evidence(run_id: &str) -> Vec<EvidenceRecord> {
         run_id: run_id.into(),
         paper_id: format!("pmid:demo-{}", index + 1),
         paper_title: format!("PD-1 resistance evidence {}", index + 1),
+        journal: Some("PaperPilot Demo Journal".into()),
+        issn: None,
+        impact_factor: None,
+        impact_factor_year: None,
+        impact_factor_source: None,
+        impact_factor_url: None,
         excerpt: excerpt.into(),
         locator: format!("page {}", index + 2),
         evidence_type: "observational".into(),

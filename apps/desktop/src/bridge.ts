@@ -39,6 +39,7 @@ export interface DesktopBridge {
   createProject(name: string, description: string): Promise<Project>;
   startRun(projectId: string, brief: ResearchBrief): Promise<ResearchRun>;
   retryRun(runId: string): Promise<ResearchRun>;
+  cancelRun?(runId: string): Promise<ResearchRun>;
   getRunSnapshot(runId: string): Promise<RunSnapshot>;
   getReport(runId: string, version?: number): Promise<Report>;
   exportReport(runId: string, format: ExportFormat): Promise<ExportResult>;
@@ -57,6 +58,7 @@ export const tauriBridge: DesktopBridge = {
   createProject: (name, description) => invoke("create_project", { name, description }),
   startRun: (projectId, brief) => invoke("start_run", { projectId, brief }),
   retryRun: (runId) => invoke("retry_run", { runId }),
+  cancelRun: (runId) => invoke("cancel_run", { runId }),
   getRunSnapshot: (runId) => invoke("get_run_snapshot", { runId }),
   getReport: (runId, version) => invoke("get_report", { runId, version }),
   exportReport: (runId, format) => invoke("export_report", { runId, format }),
