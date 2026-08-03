@@ -728,6 +728,7 @@ function ReportDocument({
   onExport?: (format: ExportFormat) => Promise<void> | void;
   exportDisabled: boolean;
 }) {
+  const groupedTimeline = groupTimelineItems(report.timeline);
   return (
     <article className="report-document">
       <header className="report-header">
@@ -743,12 +744,10 @@ function ReportDocument({
       </p>
       <ReportSection title="进展时间线">
         <ol className="report-timeline">
-          {report.timeline.map((item, index) => {
-            const parsed = item.match(timelineItemPattern);
-            const studies = splitTimelineStudies(parsed?.[2] ?? item);
+          {groupedTimeline.map(({ period, studies }) => {
             return (
-              <li key={`${index}-${item}`}>
-                <time>{parsed?.[1] ?? "阶段"}</time>
+              <li key={period}>
+                <time>{period}</time>
                 <div className="timeline-studies">
                   {studies.map((study, studyIndex) => (
                     <p key={`${studyIndex}-${study}`}>
@@ -772,12 +771,16 @@ function ReportDocument({
         <ul>{report.themes.map((item) => <li key={item}><EvidenceText text={item} evidence={report.evidence} onEvidence={onEvidence} /></li>)}</ul>
       </ReportSection>
       <ReportSection title="主要结论">
-        {report.claims.map((claim) => (
-          <div className="claim" key={claim.id}>
-            <CheckCircle2 size={17} aria-hidden="true" />
-            <div><p><EvidenceText text={claim.statement} evidence={report.evidence} onEvidence={onEvidence} /></p><button className="evidence-link" type="button" onClick={() => onEvidence(claim.evidenceIds)}>查看 {claim.evidenceIds.length} 条证据</button></div>
-          </div>
-        ))}
+        <div className="claim-narrative">
+          {report.claims.map((claim) => (
+            <p key={claim.id}>
+              <EvidenceText text={claim.statement} evidence={report.evidence} onEvidence={onEvidence} />{" "}
+              <button className="evidence-link" type="button" onClick={() => onEvidence(claim.evidenceIds)}>
+                [{claim.evidenceIds.length} 条证据]
+              </button>
+            </p>
+          ))}
+        </div>
       </ReportSection>
       <ReportSection title="相关公共数据集">
         <RelatedDatasets datasets={report.relatedDatasets ?? []} />
@@ -1001,6 +1004,19 @@ export function buildResearchDirections(timeline: string[]): ResearchDirection[]
     });
   }
   return directions;
+}
+
+export function groupTimelineItems(
+  timeline: string[],
+): Array<{ period: string; studies: string[] }> {
+  const grouped = new Map<string, string[]>();
+  timeline.forEach((item) => {
+    const parsed = item.match(timelineItemPattern);
+    const period = parsed?.[1] ?? "阶段";
+    const studies = splitTimelineStudies(parsed?.[2] ?? item);
+    grouped.set(period, [...(grouped.get(period) ?? []), ...studies]);
+  });
+  return Array.from(grouped, ([period, studies]) => ({ period, studies }));
 }
 
 function graphEvidenceRecords(text: string, evidence: EvidenceRecord[]): EvidenceRecord[] {
@@ -1272,6 +1288,7 @@ function ResearchDirectionMap({
     kind: "paper" | "entity";
     id: string;
   } | null>(null);
+  const [graphZoom, setGraphZoom] = useState(1.5);
   if (directions.length === 0) return null;
   const defaultPaper = graph.papers.find((paper) => paper.isCore) ?? graph.papers[0];
   const activePaper = activeGraphNode?.kind === "paper"
@@ -1300,13 +1317,32 @@ function ResearchDirectionMap({
           <p>连接研究方向、论文、作者、基因与关键结果，发现核心文献和实体聚类。</p>
         </div>
       </header>
+      <div className="knowledge-graph-toolbar" aria-label="图谱缩放">
+        <button
+          aria-label="缩小图谱"
+          disabled={graphZoom <= 1}
+          onClick={() => setGraphZoom((value) => Math.max(1, value - 0.25))}
+          type="button"
+        >−</button>
+        <button
+          aria-label="重置图谱缩放"
+          onClick={() => setGraphZoom(1.5)}
+          type="button"
+        >{Math.round(graphZoom * 100)}%</button>
+        <button
+          aria-label="放大图谱"
+          disabled={graphZoom >= 2.5}
+          onClick={() => setGraphZoom((value) => Math.min(2.5, value + 0.25))}
+          type="button"
+        >+</button>
+      </div>
       <div
-        aria-label="研究知识图谱，纵向滚动"
+        aria-label="研究知识图谱，可横向和纵向滚动"
         className="knowledge-graph-scroll"
         role="region"
         tabIndex={0}
       >
-        <div className="knowledge-graph">
+        <div className="knowledge-graph" style={{ width: `${graphZoom * 100}%` }}>
           <div className="knowledge-graph-legend" aria-label="图谱图例">
             <span><i className="legend-topic" />中心主题</span>
             <span><i className="legend-direction" />研究方向</span>

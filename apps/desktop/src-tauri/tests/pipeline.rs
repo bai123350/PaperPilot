@@ -483,7 +483,7 @@ fn live_pipeline_uses_the_configured_backend_for_report_and_follow_up() {
             .contains("Google Scholar：已生成手动补充检索入口")
     );
     assert!(snapshot.operations[2].summary.contains("合并为 14 篇"));
-    assert!(snapshot.operations[3].summary.contains("≥7 分的有 3 篇"));
+    assert!(snapshot.operations[3].summary.contains("≥1 分的有 3 篇"));
     assert!(
         snapshot.operations[3]
             .summary

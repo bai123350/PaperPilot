@@ -523,7 +523,7 @@ impl ResearchEngine {
                     vec![(
                         3,
                         format!(
-                            "模型正在分批逐篇解读高相关候选文献：已完成 {evaluated_count}/{total_count} 篇，其中 ≥7 分 {above_threshold_count} 篇。\n{interpretations}"
+                            "模型正在分批逐篇解读高相关候选文献：已完成 {evaluated_count}/{total_count} 篇，其中 ≥1 分 {above_threshold_count} 篇。\n{interpretations}"
                         ),
                         "running",
                     )]
@@ -557,7 +557,7 @@ impl ResearchEngine {
                     vec![(
                         3,
                         format!(
-                            "模型已逐篇解读并展示全部 {evaluated_count} 篇去重候选文献；≥7 分的有 {above_threshold_count} 篇并全部进入证据抽取。以下按分数从高到低排列：\n{ranking}"
+                            "模型已逐篇解读并展示全部 {evaluated_count} 篇去重候选文献；≥1 分的有 {above_threshold_count} 篇并全部进入证据抽取。以下按分数从高到低排列：\n{ranking}"
                         ),
                         "completed",
                     )]

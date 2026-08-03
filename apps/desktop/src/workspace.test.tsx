@@ -3,7 +3,12 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Report, RunSnapshot } from "./generated/contracts";
-import { Workspace, paperIdentifierUrl, splitTimelineStudies } from "./workspace";
+import {
+  Workspace,
+  groupTimelineItems,
+  paperIdentifierUrl,
+  splitTimelineStudies,
+} from "./workspace";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
@@ -104,6 +109,17 @@ describe("splitTimelineStudies", () => {
       "研究甲取得进展（evidence-1）",
       "研究乙完成验证（evidence-2）",
       "研究丙补充机制（evidence-3）。",
+    ]);
+  });
+
+  it("shows a repeated year once and keeps all studies under it", () => {
+    expect(groupTimelineItems([
+      "2020：研究甲",
+      "2020：研究乙",
+      "2021：研究丙",
+    ])).toEqual([
+      { period: "2020", studies: ["研究甲", "研究乙"] },
+      { period: "2021", studies: ["研究丙"] },
     ]);
   });
 });
@@ -447,10 +463,11 @@ describe("desktop workspace", () => {
     expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "研究知识图谱" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: /研究知识图谱/ })).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "研究知识图谱，纵向滚动" })).toHaveAttribute(
+    expect(screen.getByRole("region", { name: "研究知识图谱，可横向和纵向滚动" })).toHaveAttribute(
       "tabindex",
       "0",
     );
+    expect(screen.getByRole("button", { name: "重置图谱缩放" })).toHaveTextContent("150%");
     expect(screen.getByTestId("research-knowledge-graph")).toBeInTheDocument();
     expect(container.querySelectorAll('[data-testid="knowledge-direction-node"]').length).toBeGreaterThan(0);
     expect(container.querySelectorAll('[data-testid="knowledge-paper-node"]')).toHaveLength(3);

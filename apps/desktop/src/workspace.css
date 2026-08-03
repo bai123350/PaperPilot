@@ -140,10 +140,14 @@ button { cursor: pointer; }
 .research-direction-map > header > span { width: 31px; height: 31px; flex: 0 0 31px; display: grid; place-items: center; color: #176b52; background: #dfeee7; border-radius: 50%; }
 .research-direction-map h3 { margin: 0; color: #26342d; font-size: 14px; }
 .research-direction-map header p { margin: 4px 0 0; color: #748078; font-size: 10px; line-height: 1.5; }
-.knowledge-graph-scroll { max-width: 100%; max-height: min(76vh,760px); overflow-x: hidden; overflow-y: auto; padding: 12px 5px 6px; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; }
+.knowledge-graph-toolbar { display: flex; justify-content: flex-end; gap: 5px; padding-top: 10px; }
+.knowledge-graph-toolbar button { min-width: 30px; height: 28px; padding: 0 7px; color: #315346; background: #fff; border: 1px solid #cbd8d1; border-radius: 4px; font-size: 10px; font-weight: 800; cursor: pointer; }
+.knowledge-graph-toolbar button:disabled { opacity: .4; cursor: default; }
+.knowledge-graph-toolbar button:focus-visible { outline: 2px solid #2584cf; outline-offset: 2px; }
+.knowledge-graph-scroll { max-width: 100%; max-height: min(76vh,760px); overflow: auto; padding: 6px 5px; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; }
 .knowledge-graph-scroll:focus-visible { outline: 2px solid #2584cf; outline-offset: 2px; }
-.knowledge-graph { position: relative; width: 100%; min-width: 0; background: radial-gradient(circle at center,rgba(226,239,233,.64),rgba(245,248,246,0) 56%); }
-.knowledge-graph svg { width: 100%; min-height: 680px; display: block; overflow: visible; }
+.knowledge-graph { position: relative; min-width: 100%; background: radial-gradient(circle at center,rgba(226,239,233,.64),rgba(245,248,246,0) 56%); }
+.knowledge-graph svg { width: 100%; aspect-ratio: 1; display: block; overflow: visible; }
 .knowledge-graph-legend { position: absolute; z-index: 2; top: 8px; right: 10px; max-width: 230px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px 10px; padding: 8px 9px; color: #5d6c64; background: rgba(255,255,255,.88); border: 1px solid #d7e0db; border-radius: 6px; box-shadow: 0 4px 12px rgba(34,62,49,.05); font-size: 8px; pointer-events: none; }
 .knowledge-graph-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .knowledge-graph-legend i { width: 8px; height: 8px; display: inline-block; flex: 0 0 auto; background: #7ba998; border-radius: 50%; }
@@ -190,7 +194,10 @@ button { cursor: pointer; }
 .knowledge-graph-detail p { margin: 0; color: #59675f; font-size: 10px; line-height: 1.55; }
 .knowledge-graph-detail small { grid-column: 1/-1; color: #859089; font-size: 8px; }
 .direction-map-note { margin: 10px 0 0; color: #89938d; font-size: 9px; text-align: right; }
-.claim { display: grid; grid-template-columns: 22px 1fr; gap: 10px; padding: 13px 0; border-top: 1px solid #e2e6e3; }.claim > svg { color: #176b52; margin-top: 2px; }.claim p { margin: 0 0 7px; line-height: 1.6; }
+.claim-narrative { color: #4f5d55; font-size: 14px; line-height: 1.85; }
+.claim-narrative p { margin: 0; padding: 0 0 14px; text-align: justify; }
+.claim-narrative p + p { padding-top: 14px; border-top: 1px solid #e2e6e3; }
+.claim-narrative .evidence-link { display: inline; margin-left: 4px; vertical-align: baseline; }
 .evidence-link { padding: 0; color: #176b52; background: transparent; border: 0; font-size: 11px; font-weight: 750; }
 .inline-evidence-link, .paper-id-link, .metric-link { color: #1268b3; font-weight: 750; text-decoration: none; }
 .inline-evidence-citation { margin-left: 1px; font-size: .66em; line-height: 0; vertical-align: super; }

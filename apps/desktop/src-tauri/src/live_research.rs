@@ -2,7 +2,10 @@ use chrono::{Datelike, Utc};
 use quick_xml::{Reader, XmlVersion, events::Event};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    path::Path,
+};
 use thiserror::Error;
 
 use crate::{
@@ -29,13 +32,17 @@ const CROSSREF_PAGE_SIZE: usize = 500;
 const CROSSREF_PAGE_SIZE_QUERY: &str = "500";
 const CROSSREF_MAX_SEARCH_RESULTS: usize = 1_000;
 const SOURCE_PAGE_DELAY_MS: u64 = 350;
-const MIN_RELEVANCE_SCORE: f32 = 7.0;
-const RANKING_BATCH_SIZE: usize = 10;
+const MIN_RELEVANCE_SCORE: f32 = 1.0;
+const MAX_MODEL_RANKING_CANDIDATES: usize = 120;
+const MIN_RANKING_CANDIDATES_PER_SOURCE: usize = 15;
+const RANKING_BATCH_SIZE: usize = 25;
+const MAX_RANKING_CONCURRENCY: usize = 3;
 const MAX_RANKING_ATTEMPTS: usize = 3;
 const EVIDENCE_BATCH_SIZE: usize = 8;
 const MAX_EVIDENCE_ATTEMPTS: usize = 3;
 const MAX_EXCERPT_CHARS: usize = 2_400;
 const MAX_RANKING_EXCERPT_CHARS: usize = 700;
+const MAX_REPORT_MODEL_EVIDENCE: usize = 40;
 const MAX_REPORT_EVIDENCE_CHARS: usize = 1_200;
 const MAX_MODEL_REQUEST_ATTEMPTS: usize = 3;
 const EUROPE_PMC: &str = "Europe PMC";
@@ -399,7 +406,7 @@ impl OpenAiResearchBackend {
             returned_count += batch_size;
             for result in response.result_list.result {
                 if let Some(paper) = SourcePaper::from_europe_pmc(result)
-                    && source_paper_abstract_contains_query_keyword(&paper, query)
+                    && source_paper_matches_query(&paper, query)
                 {
                     keyword_matched_count += 1;
                     papers.push(paper);
@@ -483,7 +490,7 @@ impl OpenAiResearchBackend {
                 .read_to_string()
                 .map_err(|_| SourceSearchError::InvalidResponse)?;
             for paper in parse_pubmed_xml(&body)? {
-                if source_paper_abstract_contains_query_keyword(&paper, query) {
+                if source_paper_matches_query(&paper, query) {
                     keyword_matched_count += 1;
                     papers.push(paper);
                 }
@@ -548,7 +555,7 @@ impl OpenAiResearchBackend {
             returned_count += batch_size;
             for work in response.results {
                 if let Some(paper) = SourcePaper::from_openalex(work)
-                    && source_paper_abstract_contains_query_keyword(&paper, query)
+                    && source_paper_matches_query(&paper, query)
                 {
                     keyword_matched_count += 1;
                     papers.push(paper);
@@ -615,7 +622,7 @@ impl OpenAiResearchBackend {
             returned_count += batch_size;
             for work in response.message.items {
                 if let Some(paper) = SourcePaper::from_crossref(work)
-                    && source_paper_abstract_contains_query_keyword(&paper, query)
+                    && source_paper_matches_query(&paper, query)
                 {
                     keyword_matched_count += 1;
                     papers.push(paper);
@@ -715,7 +722,7 @@ impl OpenAiResearchBackend {
         let collected_count = collected.len();
         let merged = merge_duplicate_papers(collected);
         let unique_count = merged.len();
-        let papers = merged;
+        let papers = select_ranking_candidates(merged, query);
         on_trace(LiveResearchTrace::SourcesMerged {
             collected_count,
             unique_count,
@@ -785,28 +792,51 @@ impl OpenAiResearchBackend {
         on_trace: &mut dyn FnMut(LiveResearchTrace),
     ) -> Result<Vec<RankedPaper>, LiveResearchError> {
         let mut ranked = Vec::with_capacity(papers.len());
-        for (batch_number, batch) in papers.chunks(RANKING_BATCH_SIZE).enumerate() {
+        let batches = (0..papers.len())
+            .collect::<Vec<_>>()
+            .chunks(RANKING_BATCH_SIZE)
+            .map(<[usize]>::to_vec)
+            .collect::<Vec<_>>();
+        for wave in batches.chunks(MAX_RANKING_CONCURRENCY) {
             self.ensure_not_cancelled()?;
-            let batch_start = batch_number * RANKING_BATCH_SIZE;
-            let indices = (batch_start..batch_start + batch.len()).collect::<Vec<_>>();
-            let mut batch_ranked = self.rank_paper_subset(brief, papers, &indices)?;
-            ranked.append(&mut batch_ranked);
-            let mut progress = ranked
-                .iter()
-                .map(|item| ranked_source(item, &papers[item.source_index]))
-                .collect::<Vec<_>>();
-            progress.sort_by(|left, right| right.score.cmp(&left.score));
-            on_trace(LiveResearchTrace::RankingProgress {
-                evaluated_count: ranked.len(),
-                total_count: papers.len(),
-                above_threshold_count: ranked
-                    .iter()
-                    .filter(|item| item.score >= MIN_RELEVANCE_SCORE)
-                    .count(),
-                ranked: progress,
-            });
+            std::thread::scope(|scope| -> Result<(), LiveResearchError> {
+                let (sender, receiver) = std::sync::mpsc::channel();
+                for indices in wave {
+                    let sender = sender.clone();
+                    scope.spawn(move || {
+                        let result = self.rank_paper_subset(brief, papers, indices);
+                        let _ = sender.send(result);
+                    });
+                }
+                drop(sender);
+                for _ in 0..wave.len() {
+                    let mut batch_ranked =
+                        receiver.recv().map_err(|_| LiveResearchError::Model)??;
+                    ranked.append(&mut batch_ranked);
+                    let mut progress = ranked
+                        .iter()
+                        .map(|item| ranked_source(item, &papers[item.source_index]))
+                        .collect::<Vec<_>>();
+                    progress.sort_by(|left, right| right.score.cmp(&left.score));
+                    on_trace(LiveResearchTrace::RankingProgress {
+                        evaluated_count: ranked.len(),
+                        total_count: papers.len(),
+                        above_threshold_count: ranked
+                            .iter()
+                            .filter(|item| item.score >= MIN_RELEVANCE_SCORE)
+                            .count(),
+                        ranked: progress,
+                    });
+                }
+                Ok(())
+            })?;
         }
-        ranked.sort_by(|left, right| right.score.total_cmp(&left.score));
+        ranked.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.source_index.cmp(&right.source_index))
+        });
         if ranked.len() != papers.len() {
             return Err(LiveResearchError::InvalidRankingResponse);
         }
@@ -827,7 +857,7 @@ impl OpenAiResearchBackend {
             }
             let requested = pending.clone();
             let value = match self.complete_json(
-                "你是生物医学文献相关性评审器。必须逐篇解读每个输入来源，为每篇按与研究问题的直接相关程度给出 0–20 分；不得遗漏任何 source_index；只输出一个包含 items 数组的 JSON 对象。分数必须是数字，理由使用 reason 字段。",
+                "你是生物医学文献相关性评审器。必须逐篇解读每个输入来源，为每篇按与研究问题的直接相关程度给出 0–20 分；不得遗漏任何 source_index；只输出一个包含 items 数组的 JSON 对象。分数必须是数字，理由使用 reason 字段且最多 40 个汉字或 20 个英文单词。",
                 json!({
                     "research_brief": brief,
                     "scoring": {
@@ -986,9 +1016,10 @@ impl OpenAiResearchBackend {
             }
             let requested = pending.clone();
             let value = match self.complete_json(
-                "你是严谨的生物医学证据抽取器。必须逐篇解读输入摘要，每个 source_index 恰好返回一条；只使用输入摘要，不得补写事实；只输出一个包含 items 数组的 JSON 对象。",
+                "你是严谨的生物医学证据抽取器。必须逐篇解读输入摘要，每个 source_index 恰好返回一条；只使用输入摘要，不得补写事实；support 和 findings 必须用简体中文概述，基因、蛋白、药物等固定术语保留原文；只输出一个包含 items 数组的 JSON 对象。",
                 json!({
                     "task": "从已达到相关性阈值的真实文献摘要中逐篇抽取证据。",
+                    "language": "zh-CN",
                     "research_brief": brief,
                     "sources": requested.iter().enumerate().map(|(local_index, batch_index)| {
                         let ranked = batch[*batch_index];
@@ -1126,12 +1157,16 @@ impl LiveResearchBackend for OpenAiResearchBackend {
         revision_request: Option<&str>,
     ) -> Result<Report, LiveResearchError> {
         let (date_from, date_to) = effective_date_range(brief);
-        let allowed_ids = evidence
+        let model_evidence = evidence
+            .iter()
+            .take(MAX_REPORT_MODEL_EVIDENCE)
+            .collect::<Vec<_>>();
+        let allowed_ids = model_evidence
             .iter()
             .map(|item| item.id.clone())
             .collect::<Vec<_>>();
-        let compact_evidence = evidence
-            .iter()
+        let compact_evidence = model_evidence
+            .into_iter()
             .map(|item| {
                 json!({
                     "id": item.id,
@@ -1148,7 +1183,7 @@ impl LiveResearchBackend for OpenAiResearchBackend {
                 })
             })
             .collect::<Vec<_>>();
-        let payload = json!({
+        let mut payload = json!({
             "task": if revision_request.is_some() { "根据新增约束修订完整研究报告" } else { "生成完整研究报告" },
             "research_brief": brief,
             "revision_request": revision_request,
@@ -1185,12 +1220,34 @@ impl LiveResearchBackend for OpenAiResearchBackend {
         });
         let system_prompt = report_system_prompt();
         let mut last_error = LiveResearchError::InvalidReportResponse;
+        let mut last_report_value = None;
         for _ in 0..MAX_MODEL_REQUEST_ATTEMPTS {
-            let value = self.complete_json(&system_prompt, payload.clone())?;
-            let draft: ReportDraft = match serde_json::from_value(value) {
+            let value = match self.complete_json(&system_prompt, payload.clone()) {
+                Ok(value) => value,
+                Err(
+                    error @ (LiveResearchError::InvalidJson
+                    | LiveResearchError::Model
+                    | LiveResearchError::ModelRateLimited),
+                ) => {
+                    last_error = error;
+                    payload["format_correction"] = json!({
+                        "previous_attempt": "模型未返回可解析的完整报告 JSON",
+                        "instruction": "缩短文字并重新输出完整 JSON；必须保留所有必需字段，且 recommendations 恰好三项。"
+                    });
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            last_report_value = Some(value.clone());
+            let draft = match parse_report_draft(value) {
                 Ok(draft) => draft,
-                Err(_) => {
+                Err(error) => {
                     last_error = LiveResearchError::InvalidReportResponse;
+                    payload["format_correction"] = json!({
+                        "previous_attempt": "报告 JSON 无法匹配 output_schema",
+                        "parser_error": error.to_string(),
+                        "instruction": "重新输出完整 JSON 对象；不要添加外层包装；字段名和字段类型必须与 output_schema 完全一致。"
+                    });
                     continue;
                 }
             };
@@ -1199,13 +1256,26 @@ impl LiveResearchBackend for OpenAiResearchBackend {
                 Ok(()) => return Ok(report),
                 Err(error) if error.contains("outside") => {
                     last_error = LiveResearchError::UnknownEvidence;
+                    payload["format_correction"] = json!({
+                        "previous_attempt": "引用了 allowed_evidence_ids 之外的 ID",
+                        "instruction": "重新输出完整报告，所有 claim 和 recommendation 只能引用 allowed_evidence_ids 中的原始字符串。"
+                    });
                 }
-                Err(_) => {
+                Err(error) => {
                     last_error = LiveResearchError::CitationAudit;
+                    payload["format_correction"] = json!({
+                        "previous_attempt": error,
+                        "instruction": "重新输出完整报告；recommendations 必须恰好三项，且每个 claim 和 recommendation 的 evidenceIds 都不能为空。"
+                    });
                 }
             }
         }
-        Err(last_error)
+        let mut fallback = evidence_grounded_fallback_report(run_id, version, brief, evidence);
+        if let Some(value) = last_report_value {
+            merge_report_fragments(&mut fallback, value);
+        }
+        validate_report(&fallback).map_err(|_| last_error)?;
+        Ok(fallback)
     }
 
     fn grounded_reply(
@@ -1809,21 +1879,25 @@ fn strip_markup(value: &str) -> String {
         .join(" ")
 }
 
-fn source_paper_abstract_contains_query_keyword(paper: &SourcePaper, query: &str) -> bool {
-    text_contains_any_query_keyword(&paper.excerpt, query)
+fn source_paper_matches_query(paper: &SourcePaper, query: &str) -> bool {
+    text_contains_any_query_group(&format!("{} {}", paper.title, paper.excerpt), query)
 }
 
-fn text_contains_any_query_keyword(text: &str, query: &str) -> bool {
+fn text_contains_any_query_group(text: &str, query: &str) -> bool {
     let searchable = normalize_search_text(text);
     let groups = boolean_query_groups(query);
     !searchable.is_empty()
         && !groups.is_empty()
-        && groups.iter().any(|alternatives| {
-            alternatives.iter().any(|term| {
-                let normalized = normalize_search_text(term);
-                !normalized.is_empty() && search_text_contains(&searchable, &normalized)
-            })
-        })
+        && groups
+            .iter()
+            .any(|alternatives| query_group_matches(&searchable, alternatives))
+}
+
+fn query_group_matches(searchable: &str, alternatives: &[String]) -> bool {
+    alternatives.iter().any(|term| {
+        let normalized = normalize_search_text(term);
+        !normalized.is_empty() && search_text_contains(searchable, &normalized)
+    })
 }
 
 fn boolean_query_groups(query: &str) -> Vec<Vec<String>> {
@@ -2058,6 +2132,78 @@ fn merge_duplicate_papers(papers: Vec<SourcePaper>) -> Vec<SourcePaper> {
     merged
 }
 
+fn select_ranking_candidates(papers: Vec<SourcePaper>, query: &str) -> Vec<SourcePaper> {
+    if papers.len() <= MAX_MODEL_RANKING_CANDIDATES {
+        return papers;
+    }
+
+    let groups = boolean_query_groups(query);
+    let mut ranked_indices = (0..papers.len()).collect::<Vec<_>>();
+    ranked_indices.sort_by(|left, right| {
+        ranking_candidate_priority(&papers[*right], &groups)
+            .cmp(&ranking_candidate_priority(&papers[*left], &groups))
+            .then_with(|| left.cmp(right))
+    });
+
+    let mut selected = HashSet::new();
+    for source in [EUROPE_PMC, PUBMED, OPENALEX, CROSSREF] {
+        let mut represented = 0;
+        for index in &ranked_indices {
+            if papers[*index].sources.iter().any(|item| item == source) {
+                selected.insert(*index);
+                represented += 1;
+                if represented >= MIN_RANKING_CANDIDATES_PER_SOURCE {
+                    break;
+                }
+            }
+        }
+    }
+    for index in &ranked_indices {
+        if selected.len() >= MAX_MODEL_RANKING_CANDIDATES {
+            break;
+        }
+        selected.insert(*index);
+    }
+
+    ranked_indices
+        .into_iter()
+        .filter(|index| selected.contains(index))
+        .take(MAX_MODEL_RANKING_CANDIDATES)
+        .map(|index| papers[index].clone())
+        .collect()
+}
+
+fn ranking_candidate_priority(
+    paper: &SourcePaper,
+    groups: &[Vec<String>],
+) -> (usize, usize, usize, u32) {
+    let title = normalize_search_text(&paper.title);
+    let searchable = normalize_search_text(&format!("{} {}", paper.title, paper.excerpt));
+    let title_group_matches = groups
+        .iter()
+        .filter(|alternatives| query_group_matches(&title, alternatives))
+        .count();
+    let matching_terms = groups
+        .iter()
+        .flatten()
+        .filter(|term| {
+            let normalized = normalize_search_text(term);
+            !normalized.is_empty() && search_text_contains(&searchable, &normalized)
+        })
+        .count();
+    let year = paper
+        .year
+        .as_deref()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_default();
+    (
+        paper.sources.len(),
+        title_group_matches,
+        matching_terms,
+        year,
+    )
+}
+
 fn normalize_title(title: &str) -> String {
     title
         .chars()
@@ -2205,15 +2351,65 @@ struct GroundedReplyPayload {
 
 #[derive(Debug, Deserialize)]
 struct ReportDraft {
+    #[serde(alias = "reportTitle", alias = "report_title")]
     title: String,
+    #[serde(alias = "executiveSummary", alias = "executive_summary")]
     summary: String,
+    #[serde(deserialize_with = "deserialize_one_or_many_strings")]
     timeline: Vec<String>,
+    #[serde(deserialize_with = "deserialize_one_or_many_strings")]
     themes: Vec<String>,
-    claims: Vec<Claim>,
+    #[serde(alias = "majorClaims", alias = "major_claims")]
+    claims: Vec<ReportClaimDraft>,
+    #[serde(deserialize_with = "deserialize_one_or_many_strings")]
     controversies: Vec<String>,
+    #[serde(deserialize_with = "deserialize_one_or_many_strings")]
     limitations: Vec<String>,
+    #[serde(
+        alias = "researchGaps",
+        alias = "research_gaps",
+        deserialize_with = "deserialize_one_or_many_strings"
+    )]
     gaps: Vec<String>,
-    recommendations: Vec<Recommendation>,
+    #[serde(alias = "nextSteps", alias = "next_steps")]
+    recommendations: Vec<ReportRecommendationDraft>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReportClaimDraft {
+    #[serde(default)]
+    id: String,
+    #[serde(alias = "claim", alias = "content")]
+    statement: String,
+    #[serde(
+        alias = "evidence_ids",
+        alias = "evidence",
+        deserialize_with = "deserialize_one_or_many_strings"
+    )]
+    evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReportRecommendationDraft {
+    #[serde(default)]
+    id: String,
+    title: String,
+    rationale: String,
+    hypothesis: String,
+    #[serde(alias = "minimal_validation")]
+    minimal_validation: String,
+    #[serde(deserialize_with = "deserialize_one_or_many_strings")]
+    resources: Vec<String>,
+    #[serde(deserialize_with = "deserialize_one_or_many_strings")]
+    risks: Vec<String>,
+    #[serde(alias = "stop_condition")]
+    stop_condition: String,
+    #[serde(
+        alias = "evidence_ids",
+        alias = "evidence",
+        deserialize_with = "deserialize_one_or_many_strings"
+    )]
+    evidence_ids: Vec<String>,
 }
 
 impl ReportDraft {
@@ -2231,17 +2427,405 @@ impl ReportDraft {
             summary: self.summary,
             timeline: self.timeline,
             themes: self.themes,
-            claims: self.claims,
+            claims: self
+                .claims
+                .into_iter()
+                .enumerate()
+                .map(|(index, claim)| Claim {
+                    id: non_empty_or(claim.id, format!("claim-{}", index + 1)),
+                    statement: claim.statement,
+                    evidence_ids: claim.evidence_ids,
+                })
+                .collect(),
             controversies: self.controversies,
             limitations: self.limitations,
             gaps: self.gaps,
-            recommendations: self.recommendations,
+            recommendations: self
+                .recommendations
+                .into_iter()
+                .enumerate()
+                .map(|(index, recommendation)| Recommendation {
+                    id: non_empty_or(recommendation.id, format!("recommendation-{}", index + 1)),
+                    title: recommendation.title,
+                    rationale: recommendation.rationale,
+                    hypothesis: recommendation.hypothesis,
+                    minimal_validation: recommendation.minimal_validation,
+                    resources: recommendation.resources,
+                    risks: recommendation.risks,
+                    stop_condition: recommendation.stop_condition,
+                    evidence_ids: recommendation.evidence_ids,
+                })
+                .collect(),
             related_datasets: Vec::new(),
             evidence,
             references,
             disclaimer: "本报告仅供科研用途，不构成临床诊断或治疗建议。".into(),
             created_at: Utc::now(),
         }
+    }
+}
+
+fn evidence_grounded_fallback_report(
+    run_id: &str,
+    version: u32,
+    brief: &ResearchBrief,
+    evidence: &[EvidenceRecord],
+) -> Report {
+    let claims = evidence
+        .iter()
+        .take(8)
+        .enumerate()
+        .map(|(index, record)| Claim {
+            id: format!("claim-{}", index + 1),
+            statement: fallback_claim_statement(record),
+            evidence_ids: vec![record.id.clone()],
+        })
+        .collect::<Vec<_>>();
+    let evidence_ids = evidence
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    let recommendations = [
+        (
+            "独立数据复现",
+            "在独立公开数据或新增样本中复核已纳入证据所支持的主要观察。",
+            "主要观察可在预先定义的独立数据中保持方向一致。",
+            "选择一个独立数据集，固定纳入标准、指标和阈值后完成一次复现分析。",
+            vec!["独立数据集".into(), "可复现分析脚本".into()],
+            vec!["队列异质性".into(), "测量平台差异".into()],
+            "主要效应方向不一致，或数据质量不足以完成预设分析。",
+        ),
+        (
+            "关键观察的正交验证",
+            "使用不同测量方法验证 Evidence Record 中直接报告的关键观察。",
+            "关键观察能够被至少一种独立测量方法重复检出。",
+            "围绕一个优先级最高的观察设计小规模、含阳性和阴性对照的验证实验。",
+            vec!["验证样本".into(), "正交检测方法".into()],
+            vec!["技术偏倚".into(), "样本量不足".into()],
+            "质量控制失败，或预设效应在重复实验中不可检出。",
+        ),
+        (
+            "前瞻性最小验证",
+            "通过预注册的小规模验证检验现有摘要级证据能否推广到新的研究场景。",
+            "预先定义的主要终点能够在新样本中达到可检测的效应。",
+            "预注册主要终点、分析方法与停止规则，先实施最小可行样本的探索性验证。",
+            vec!["前瞻性样本".into(), "统计分析支持".into()],
+            vec!["选择偏倚".into(), "效应高估".into()],
+            "达到预设无效界值，或继续收集数据无法合理改变结论。",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(
+        |(
+            index,
+            (title, rationale, hypothesis, minimal_validation, resources, risks, stop_condition),
+        )| Recommendation {
+            id: format!("recommendation-{}", index + 1),
+            title: title.into(),
+            rationale: rationale.into(),
+            hypothesis: hypothesis.into(),
+            minimal_validation: minimal_validation.into(),
+            resources,
+            risks,
+            stop_condition: stop_condition.into(),
+            evidence_ids: evidence_ids
+                .get(index % evidence_ids.len().max(1))
+                .cloned()
+                .into_iter()
+                .collect(),
+        },
+    )
+    .collect::<Vec<_>>();
+
+    let mut themes = brief
+        .keywords
+        .iter()
+        .chain(brief.outcomes.iter())
+        .map(|item| item.trim())
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    themes.extend(
+        evidence
+            .iter()
+            .flat_map(|record| record.genes.iter().cloned()),
+    );
+    themes.sort();
+    themes.dedup();
+    themes.truncate(8);
+    if themes.is_empty() {
+        themes.push("已纳入证据".into());
+    }
+
+    let references = evidence
+        .iter()
+        .map(|record| format!("{} ({})", record.paper_title, record.paper_id))
+        .collect();
+    let (date_from, date_to) = effective_date_range(brief);
+    let timeline = fallback_evidence_timeline(evidence, date_to);
+    Report {
+        contract_version: CONTRACT_VERSION.into(),
+        schema_version: "1.1".into(),
+        run_id: run_id.into(),
+        version,
+        title: brief.question.clone(),
+        summary: format!(
+            "本报告纳入 {} 条可追溯 Evidence Record，并采用保守方式汇总其直接支持的观察。主要结论均链接到当前研究运行中的原始证据。",
+            evidence.len()
+        ),
+        timeline: if timeline.is_empty() {
+            vec![format!(
+                "{date_from}–{date_to}：检索与筛选该时间范围内的研究，共形成 {} 条可引用证据记录。",
+                evidence.len()
+            )]
+        } else {
+            timeline
+        },
+        themes,
+        claims,
+        related_datasets: Vec::new(),
+        controversies: vec![
+            "现有 Evidence Record 尚不足以安全归纳跨研究的一致争议方向，需结合全文进一步核验。"
+                .into(),
+        ],
+        limitations: vec![
+            "当前综合主要基于检索摘要和已抽取片段，可能缺少全文中的方法细节、阴性结果与限定条件。"
+                .into(),
+        ],
+        gaps: vec![
+            "需要独立数据复现、正交实验验证和预先定义终点的前瞻性研究，以检验现有观察的稳健性。"
+                .into(),
+        ],
+        recommendations,
+        evidence: evidence.to_vec(),
+        references,
+        disclaimer: "本报告仅供科研用途，不构成临床诊断或治疗建议。".into(),
+        created_at: Utc::now(),
+    }
+}
+
+fn fallback_claim_statement(record: &EvidenceRecord) -> String {
+    if let Some(statement) = record
+        .supports
+        .first()
+        .or_else(|| record.findings.first())
+        .filter(|statement| contains_cjk(statement))
+    {
+        return statement.clone();
+    }
+    let entities = if record.genes.is_empty() {
+        String::new()
+    } else {
+        format!("，涉及 {}", record.genes.join("、"))
+    };
+    format!(
+        "文献《{}》报告了与当前研究问题相关的观察{}；具体研究结果、原文片段和证据边界请查看所链接的 Evidence Record。",
+        record.paper_title, entities
+    )
+}
+
+fn contains_cjk(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| matches!(character, '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}'))
+}
+
+fn fallback_evidence_timeline(evidence: &[EvidenceRecord], default_year: u16) -> Vec<String> {
+    let mut by_year = BTreeMap::<u16, Vec<String>>::new();
+    for record in evidence.iter().take(30) {
+        let year = first_four_digit_year(&record.locator).unwrap_or(default_year);
+        let observation = record
+            .supports
+            .first()
+            .or_else(|| record.findings.first())
+            .map(String::as_str)
+            .unwrap_or("保留了可追溯的摘要证据片段");
+        by_year.entry(year).or_default().push(format!(
+            "《{}》：{} [{}]",
+            record.paper_title, observation, record.id
+        ));
+    }
+    by_year
+        .into_iter()
+        .map(|(year, studies)| format!("{year}：{}", studies.join("\n")))
+        .collect()
+}
+
+fn first_four_digit_year(value: &str) -> Option<u16> {
+    value
+        .split(|character: char| !character.is_ascii_digit())
+        .find_map(|candidate| {
+            (candidate.len() == 4)
+                .then(|| candidate.parse::<u16>().ok())
+                .flatten()
+                .filter(|year| (1900..=2100).contains(year))
+        })
+}
+
+fn merge_report_fragments(report: &mut Report, value: Value) {
+    let value = unwrap_report_value(value);
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    if let Some(title) = model_string_field(object, &["title", "reportTitle", "report_title"]) {
+        report.title = title;
+    }
+    if let Some(summary) = model_string_field(
+        object,
+        &["summary", "executiveSummary", "executive_summary"],
+    ) {
+        report.summary = summary;
+    }
+    if let Some(timeline) = model_string_list_field(object, &["timeline", "progressTimeline"]) {
+        report.timeline = timeline;
+    }
+    if let Some(themes) = model_string_list_field(object, &["themes", "themeMap", "theme_map"]) {
+        report.themes = themes;
+    }
+    let allowed_ids = report
+        .evidence
+        .iter()
+        .map(|record| record.id.as_str())
+        .collect::<HashSet<_>>();
+    if let Some(Value::Array(items)) = ["claims", "majorClaims", "major_claims"]
+        .iter()
+        .find_map(|key| object.get(*key))
+    {
+        let claims = items
+            .iter()
+            .filter_map(Value::as_object)
+            .enumerate()
+            .filter_map(|(index, claim)| {
+                let statement = model_string_field(claim, &["statement", "claim", "content"])?;
+                if !contains_cjk(&statement) {
+                    return None;
+                }
+                let evidence_ids =
+                    model_string_list_field(claim, &["evidenceIds", "evidence_ids", "evidence"])?
+                        .into_iter()
+                        .filter(|id| allowed_ids.contains(id.as_str()))
+                        .collect::<Vec<_>>();
+                if evidence_ids.is_empty() {
+                    return None;
+                }
+                Some(Claim {
+                    id: model_string_field(claim, &["id"])
+                        .unwrap_or_else(|| format!("claim-{}", index + 1)),
+                    statement,
+                    evidence_ids,
+                })
+            })
+            .collect::<Vec<_>>();
+        if !claims.is_empty() {
+            report.claims = claims;
+        }
+    }
+}
+
+fn model_string_field(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
+}
+
+fn model_string_list_field(
+    object: &serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<Vec<String>> {
+    keys.iter().find_map(|key| {
+        let value = object.get(*key)?;
+        let items = match value {
+            Value::String(item) => non_blank_strings([item.clone()]),
+            Value::Array(items) => non_blank_strings(items.iter().filter_map(|item| {
+                item.as_str().map(str::to_owned).or_else(|| {
+                    let object = item.as_object()?;
+                    let text = model_string_field(
+                        object,
+                        &["content", "event", "description", "finding", "text"],
+                    )?;
+                    let year = model_string_field(object, &["year", "date"]);
+                    Some(year.map_or(text.clone(), |year| format!("{year}：{text}")))
+                })
+            })),
+            _ => Vec::new(),
+        };
+        (!items.is_empty()).then_some(items)
+    })
+}
+
+fn parse_report_draft(mut value: Value) -> Result<ReportDraft, serde_json::Error> {
+    value = unwrap_report_value(value);
+    serde_json::from_value(value)
+}
+
+fn unwrap_report_value(mut value: Value) -> Value {
+    for key in [
+        "report",
+        "researchReport",
+        "research_report",
+        "result",
+        "data",
+        "output",
+    ] {
+        let Some(candidate) = value.get(key) else {
+            continue;
+        };
+        if candidate.is_object() {
+            value = candidate.clone();
+            break;
+        }
+    }
+    if value.get("title").is_none()
+        && let Some(object) = value.as_object()
+        && object.len() == 1
+        && let Some(candidate) = object.values().next()
+        && candidate.is_object()
+    {
+        value = candidate.clone();
+    }
+    value
+}
+
+fn deserialize_one_or_many_strings<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    match value {
+        Value::String(item) => Ok(non_blank_strings([item])),
+        Value::Array(items) => Ok(non_blank_strings(items.into_iter().filter_map(
+            |item| match item {
+                Value::String(item) => Some(item),
+                _ => None,
+            },
+        ))),
+        Value::Null => Ok(Vec::new()),
+        other => Err(serde::de::Error::custom(format!(
+            "expected a string or string array, got {other}"
+        ))),
+    }
+}
+
+fn non_blank_strings(items: impl IntoIterator<Item = String>) -> Vec<String> {
+    items
+        .into_iter()
+        .map(|item| item.trim().to_owned())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn non_empty_or(value: String, fallback: String) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        fallback
+    } else {
+        value.to_owned()
     }
 }
 
@@ -2480,12 +3064,14 @@ mod tests {
     use super::{
         CROSSREF, CROSSREF_MAX_SEARCH_RESULTS, CROSSREF_PAGE_SIZE, CrossrefAuthor,
         CrossrefResponse, CrossrefWork, EUROPE_PMC, EUROPE_PMC_PAGE_SIZE, EuropePmcResponse,
-        LiveResearchError, OPENALEX_PAGE_SIZE, OpenAlexResponse, PUBMED, SourcePaper,
-        boolean_query_groups, classify_model_error, fallback_search_query,
-        google_scholar_search_url, merge_duplicate_papers, parse_confidence_value,
-        parse_json_content, parse_pubmed_xml, parse_score_value, parse_search_query_value,
+        LiveResearchError, MAX_MODEL_RANKING_CANDIDATES, MAX_RANKING_CONCURRENCY,
+        MIN_RELEVANCE_SCORE, OPENALEX, OPENALEX_PAGE_SIZE, OpenAlexResponse, PUBMED,
+        RANKING_BATCH_SIZE, SourcePaper, boolean_query_groups, classify_model_error,
+        evidence_grounded_fallback_report, fallback_search_query, google_scholar_search_url,
+        merge_duplicate_papers, merge_report_fragments, parse_confidence_value, parse_json_content,
+        parse_pubmed_xml, parse_report_draft, parse_score_value, parse_search_query_value,
         parse_usize_value, reconstruct_openalex_abstract, report_system_prompt,
-        source_paper_abstract_contains_query_keyword, truncate_chars,
+        select_ranking_candidates, source_paper_matches_query, truncate_chars,
     };
     use serde_json::json;
 
@@ -2504,6 +3090,119 @@ mod tests {
             parse_json_content("not json"),
             Err(LiveResearchError::InvalidJson)
         ));
+    }
+
+    #[test]
+    fn accepts_common_report_json_variants_without_weakening_evidence_fields() {
+        let next_steps = [1, 2, 3].map(|index| {
+            json!({
+                "title": format!("方案 {index}"),
+                "rationale": "证据依据",
+                "hypothesis": "可检验假设",
+                "minimal_validation": "最小验证",
+                "resources": "公开数据",
+                "risks": ["偏倚"],
+                "stop_condition": "未达到阈值",
+                "evidence": ["evidence-1"]
+            })
+        });
+        let draft = parse_report_draft(json!({
+            "report": {
+                "report_title": "测试报告",
+                "executive_summary": "摘要",
+                "timeline": "2025：研究进展",
+                "themes": ["主题"],
+                "major_claims": [{
+                    "statement": "主要结论",
+                    "evidence_ids": "evidence-1"
+                }],
+                "controversies": "尚无一致结论",
+                "limitations": ["样本有限"],
+                "research_gaps": "缺少验证",
+                "next_steps": next_steps
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(draft.title, "测试报告");
+        assert_eq!(draft.timeline, ["2025：研究进展"]);
+        assert_eq!(draft.claims[0].evidence_ids, ["evidence-1"]);
+        assert_eq!(draft.recommendations.len(), 3);
+        assert_eq!(draft.recommendations[0].resources, ["公开数据"]);
+    }
+
+    #[test]
+    fn fallback_report_remains_grounded_and_ranking_threshold_is_one() {
+        let brief = crate::contracts::ResearchBrief {
+            question: "青光眼中的巨噬细胞作用".into(),
+            population: Some("青光眼".into()),
+            intervention: None,
+            comparison: None,
+            outcomes: vec!["视神经损伤".into()],
+            keywords: vec!["macrophage".into()],
+            date_from: Some(2010),
+            date_to: Some(2026),
+            study_types: vec![],
+        };
+        let evidence = vec![crate::contracts::EvidenceRecord {
+            id: "evidence-1".into(),
+            run_id: "run-1".into(),
+            paper_id: "PMID:1".into(),
+            paper_title: "Macrophages in glaucoma".into(),
+            authors: vec![],
+            genes: vec!["C1QA".into()],
+            findings: vec!["观察到巨噬细胞相关变化。".into()],
+            journal: None,
+            issn: None,
+            impact_factor: None,
+            impact_factor_year: None,
+            impact_factor_source: None,
+            impact_factor_url: None,
+            excerpt: "研究摘要中的可定位原文片段。".into(),
+            locator: "abstract".into(),
+            evidence_type: "observational".into(),
+            confidence: 0.8,
+            supports: vec!["Macrophage-associated changes were observed.".into()],
+        }];
+
+        let mut report = evidence_grounded_fallback_report("run-1", 1, &brief, &evidence);
+
+        assert_eq!(MIN_RELEVANCE_SCORE, 1.0);
+        assert_eq!(report.recommendations.len(), 3);
+        assert!(crate::contracts::validate_report(&report).is_ok());
+        assert!(
+            report
+                .claims
+                .iter()
+                .all(|claim| claim.evidence_ids == ["evidence-1"])
+        );
+        assert!(
+            report.claims[0]
+                .statement
+                .contains("报告了与当前研究问题相关的观察")
+        );
+        assert!(report.timeline[0].contains("[evidence-1]"));
+
+        merge_report_fragments(
+            &mut report,
+            json!({
+                "report": {
+                    "title": "模型标题",
+                    "summary": "模型摘要",
+                    "timeline": [{"year": "2024", "event": "模型时间线内容"}],
+                    "themes": ["模型主题"],
+                    "claims": [{
+                        "statement": "模型生成的中文主要结论。",
+                        "evidence_ids": ["evidence-1"]
+                    }]
+                }
+            }),
+        );
+        assert_eq!(report.summary, "模型摘要");
+        assert_eq!(report.timeline, ["2024：模型时间线内容"]);
+        assert_eq!(report.themes, ["模型主题"]);
+        assert_eq!(report.claims[0].statement, "模型生成的中文主要结论。");
+        assert!(crate::contracts::validate_report(&report).is_ok());
     }
 
     #[test]
@@ -2668,6 +3367,47 @@ mod tests {
     }
 
     #[test]
+    fn caps_model_ranking_candidates_without_dropping_source_representation() {
+        let sources = [EUROPE_PMC, PUBMED, OPENALEX, CROSSREF];
+        let papers = (0..200)
+            .map(|index| {
+                let source_index = if index < 155 {
+                    0
+                } else {
+                    1 + (index - 155) / 15
+                };
+                SourcePaper {
+                    paper_id: format!("paper-{index}"),
+                    title: format!("PD-1 resistance study {index}"),
+                    authors: vec![],
+                    excerpt: "PD-1 blockade and acquired resistance were evaluated.".into(),
+                    year: Some(if source_index == 0 { "2025" } else { "2010" }.into()),
+                    journal: None,
+                    issn: None,
+                    sources: vec![sources[source_index].into()],
+                }
+            })
+            .collect();
+        let selected = select_ranking_candidates(
+            papers,
+            r#"("PD-1" OR "programmed death 1") AND (resistance OR refractory)"#,
+        );
+
+        assert_eq!(selected.len(), MAX_MODEL_RANKING_CANDIDATES);
+        for source in sources {
+            assert!(
+                selected
+                    .iter()
+                    .filter(|paper| paper.sources.iter().any(|item| item == source))
+                    .count()
+                    >= 15
+            );
+        }
+        assert_eq!(RANKING_BATCH_SIZE, 25);
+        assert_eq!(MAX_RANKING_CONCURRENCY, 3);
+    }
+
+    #[test]
     fn accepts_common_search_query_keys_and_normalizes_model_newlines() {
         assert_eq!(
             parse_search_query_value(&json!({
@@ -2732,7 +3472,7 @@ mod tests {
     }
 
     #[test]
-    fn crossref_results_are_included_when_the_abstract_contains_a_query_keyword() {
+    fn crossref_results_are_included_when_title_or_abstract_matches_a_query_concept() {
         let relevant = CrossrefWork {
             doi: Some("10.1000/relevant".into()),
             title: vec!["PD-1 blockade resistance in melanoma".into()],
@@ -2757,18 +3497,18 @@ mod tests {
         };
         let query = r#"("PD-1" OR "programmed death 1") AND (resistance OR refractory)"#;
 
-        assert!(source_paper_abstract_contains_query_keyword(
+        assert!(source_paper_matches_query(
             &SourcePaper::from_crossref(relevant).unwrap(),
             query
         ));
-        assert!(!source_paper_abstract_contains_query_keyword(
+        assert!(source_paper_matches_query(
             &SourcePaper::from_crossref(broad_but_irrelevant).unwrap(),
             query
         ));
     }
 
     #[test]
-    fn source_papers_are_included_when_the_abstract_contains_any_query_keyword() {
+    fn source_papers_enter_the_candidate_pool_when_any_query_concept_matches() {
         let paper = SourcePaper {
             paper_id: "openalex:W1".into(),
             title: "PD-1 blockade in melanoma".into(),
@@ -2781,8 +3521,8 @@ mod tests {
         };
         let query = r#"("PD-1" OR "programmed death 1") AND (resistance OR refractory)"#;
 
-        assert!(source_paper_abstract_contains_query_keyword(&paper, query));
-        assert!(!source_paper_abstract_contains_query_keyword(
+        assert!(source_paper_matches_query(&paper, query));
+        assert!(!source_paper_matches_query(
             &paper,
             r#"(CTLA-4) AND (ipilimumab)"#
         ));
@@ -2790,10 +3530,7 @@ mod tests {
             excerpt: "Durable response was evaluated.".into(),
             ..paper
         };
-        assert!(!source_paper_abstract_contains_query_keyword(
-            &title_only,
-            query
-        ));
+        assert!(source_paper_matches_query(&title_only, query));
     }
 
     #[test]
