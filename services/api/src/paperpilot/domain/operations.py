@@ -23,6 +23,7 @@ class OperationTaskKind(str, Enum):
 class OperationKind(str, Enum):
     STRUCTURE_QUESTION = "structure_question"
     SEARCH_SOURCE = "search_source"
+    SEARCH_DATASET_SOURCE = "search_dataset_source"
     DEDUPLICATE = "deduplicate"
     SCREEN = "screen"
     PARSE = "parse"

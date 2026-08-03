@@ -1,9 +1,14 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Report, RunSnapshot } from "./generated/contracts";
-import { Workspace, paperIdentifierUrl, splitTimelineStudies } from "./workspace";
+import {
+  Workspace,
+  groupTimelineItems,
+  paperIdentifierUrl,
+  splitTimelineStudies,
+} from "./workspace";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
@@ -11,7 +16,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 const report: Report = {
   contractVersion: "1.0",
-  schemaVersion: "1.0",
+  schemaVersion: "1.1",
   runId: "run-1",
   version: 1,
   title: "PD-1 耐药标志物：证据图谱与下一步",
@@ -23,6 +28,34 @@ const report: Report = {
       id: "claim-1",
       statement: "抗原呈递缺陷与原发耐药稳定相关。",
       evidenceIds: ["evidence-1"],
+    },
+  ],
+  relatedDatasets: [
+    {
+      id: "dataset-single-cell",
+      accession: "GSE12345",
+      title: "Single-cell validation atlas",
+      source: "NCBI GEO",
+      modality: "single_cell",
+      organism: "Homo sapiens",
+      sampleCount: 24,
+      summary: "可用于候选信号细胞来源验证的公开单细胞队列。",
+      dataTypes: ["scRNA-seq"],
+      access: "open",
+      url: "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE12345",
+    },
+    {
+      id: "dataset-atac",
+      accession: "ENCSR123ABC",
+      title: "Chromatin accessibility atlas",
+      source: "ENCODE",
+      modality: "atac_seq",
+      organism: "Homo sapiens",
+      sampleCount: 8,
+      summary: "标准化的开放染色质数据。",
+      dataTypes: ["ATAC-seq", "bigWig"],
+      access: "open",
+      url: "https://www.encodeproject.org/experiments/ENCSR123ABC/",
     },
   ],
   controversies: [],
@@ -45,6 +78,9 @@ const report: Report = {
       runId: "run-1",
       paperId: "pmid:1",
       paperTitle: "Evidence paper",
+      authors: ["Ada Liu", "Bo Wang"],
+      genes: ["B2M", "HLA-A"],
+      findings: ["B2M 缺失与抗原呈递下降相关。"],
       journal: null,
       issn: null,
       impactFactor: null,
@@ -73,6 +109,17 @@ describe("splitTimelineStudies", () => {
       "研究甲取得进展（evidence-1）",
       "研究乙完成验证（evidence-2）",
       "研究丙补充机制（evidence-3）。",
+    ]);
+  });
+
+  it("shows a repeated year once and keeps all studies under it", () => {
+    expect(groupTimelineItems([
+      "2020：研究甲",
+      "2020：研究乙",
+      "2021：研究丙",
+    ])).toEqual([
+      { period: "2020", studies: ["研究甲", "研究乙"] },
+      { period: "2021", studies: ["研究丙"] },
     ]);
   });
 });
@@ -366,6 +413,7 @@ describe("desktop workspace", () => {
 
   it("shows the complete report, exactly three plans, and traceable evidence", () => {
     const onExport = vi.fn();
+    vi.mocked(openUrl).mockClear();
     const { container } = render(
       <Workspace
         projectName="免疫耐药"
@@ -404,10 +452,31 @@ describe("desktop workspace", () => {
     );
 
     expect(screen.getByRole("heading", { name: report.title })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "相关公共数据集" })).toBeInTheDocument();
+    expect(screen.getAllByTestId("desktop-dataset-card")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "ATAC 1" }));
+    expect(screen.getAllByTestId("desktop-dataset-card")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("link", { name: "在 ENCODE 查看 ENCSR123ABC" }));
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://www.encodeproject.org/experiments/ENCSR123ABC/",
+    );
     expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "研究脉络云图" })).toBeInTheDocument();
-    expect(screen.getByRole("group", { name: /研究脉络云图/ })).toBeInTheDocument();
-    expect(container.querySelectorAll('[data-testid="research-direction-branch"]').length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: "研究知识图谱" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /研究知识图谱/ })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "研究知识图谱，可横向和纵向滚动" })).toHaveAttribute(
+      "tabindex",
+      "0",
+    );
+    expect(screen.getByRole("button", { name: "重置图谱缩放" })).toHaveTextContent("150%");
+    expect(screen.getByTestId("research-knowledge-graph")).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-testid="knowledge-direction-node"]').length).toBeGreaterThan(0);
+    expect(container.querySelectorAll('[data-testid="knowledge-paper-node"]')).toHaveLength(3);
+    expect(container.querySelectorAll(".knowledge-edge-theme").length).toBeGreaterThan(0);
+    expect(container.querySelectorAll(".knowledge-edge-association")).toHaveLength(3);
+    expect(container.querySelectorAll('[data-testid="knowledge-entity-node"]')).toHaveLength(5);
+    expect(container.querySelectorAll(".knowledge-edge-author")).toHaveLength(2);
+    expect(container.querySelectorAll(".knowledge-edge-gene")).toHaveLength(2);
+    expect(container.querySelectorAll(".knowledge-edge-finding")).toHaveLength(1);
     expect(screen.getAllByText("2010").length).toBeGreaterThan(0);
     expect(screen.getAllByText("早期文献建立了机制假设", { exact: false }).length).toBeGreaterThan(0);
     expect(screen.getAllByText("独立研究完成验证", { exact: false }).length).toBeGreaterThan(0);
@@ -428,7 +497,11 @@ describe("desktop workspace", () => {
     fireEvent.click(pmidLink);
     expect(openUrl).toHaveBeenCalledWith("https://pubmed.ncbi.nlm.nih.gov/1/");
     fireEvent.click(inlineEvidence);
-    expect(screen.getByLabelText("证据详情")).toBeInTheDocument();
+    const evidenceDrawer = screen.getByLabelText("证据详情");
+    expect(evidenceDrawer).toBeInTheDocument();
+    expect(within(evidenceDrawer).getByText("Ada Liu、Bo Wang")).toBeInTheDocument();
+    expect(within(evidenceDrawer).getByText("B2M")).toBeInTheDocument();
+    expect(within(evidenceDrawer).getByText("B2M 缺失与抗原呈递下降相关。")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "主题版图" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "参考文献" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "影响因子" })).toBeInTheDocument();

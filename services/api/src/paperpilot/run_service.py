@@ -12,6 +12,11 @@ from paperpilot.connectors.crossref import CrossrefConnector
 from paperpilot.connectors.openalex import OpenAlexConnector
 from paperpilot.connectors.pubmed import PubMedConnector
 from paperpilot.connectors.private_materials import PrivateMaterial, PrivateMaterialConnector
+from paperpilot.connectors.public_datasets import (
+    DemoDatasetConnector,
+    EncodeDatasetConnector,
+    NcbiGeoDatasetConnector,
+)
 from paperpilot.database import Database, EvidenceEntity, RunEntity, UploadEntity
 from paperpilot.domain.models import ResearchBrief, RunStage, RunStatus
 from paperpilot.domain.operations import OperationKind, OperationTaskKind, OperationUpdate
@@ -39,6 +44,7 @@ class RunService:
 
         pipeline = ResearchPipeline(
             connectors=self._connectors(run.project_id),
+            dataset_connectors=self._dataset_connectors(),
             synthesizer=self._synthesizer(),
         )
         operation_recorder = OperationRecorder(self.database)
@@ -132,6 +138,17 @@ class RunService:
                 )
             )
         return connectors
+
+    def _dataset_connectors(self) -> list:
+        if self.settings.demo_mode:
+            return [DemoDatasetConnector()]
+        return [
+            NcbiGeoDatasetConnector(
+                email=self.settings.ncbi_email,
+                api_key=self.settings.ncbi_api_key,
+            ),
+            EncodeDatasetConnector(),
+        ]
 
     def _synthesizer(self):
         if self.settings.demo_mode:

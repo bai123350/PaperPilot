@@ -1,6 +1,7 @@
 pub mod attachments;
 pub mod cancellation;
 pub mod commands;
+mod conclusion_skills;
 pub mod contracts;
 pub mod crypto;
 pub mod gateway;
@@ -10,6 +11,7 @@ pub mod live_research;
 pub mod pdf_parser;
 pub mod pipeline;
 pub mod provider_settings;
+pub mod public_datasets;
 pub mod runtime;
 pub mod storage;
 mod tauri_api;

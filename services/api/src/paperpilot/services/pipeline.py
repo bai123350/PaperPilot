@@ -10,6 +10,7 @@ from paperpilot.domain.models import (
     Claim,
     EvidenceRecord,
     Paper,
+    PublicDataset,
     Recommendation,
     Report,
     ResearchBrief,
@@ -27,6 +28,12 @@ class LiteratureConnector(Protocol):
     name: str
 
     async def search(self, brief: ResearchBrief) -> list[Paper]: ...
+
+
+class DatasetConnector(Protocol):
+    name: str
+
+    async def search(self, brief: ResearchBrief) -> list[PublicDataset]: ...
 
 
 StageCallback = Callable[[RunStage], None]
@@ -64,9 +71,11 @@ class ResearchPipeline:
     def __init__(
         self,
         connectors: list[LiteratureConnector],
+        dataset_connectors: list[DatasetConnector] | None = None,
         synthesizer: ReportSynthesizer | None = None,
     ) -> None:
         self.connectors = connectors
+        self.dataset_connectors = dataset_connectors or []
         self.synthesizer = synthesizer
 
     async def run(
@@ -77,6 +86,7 @@ class ResearchPipeline:
     ) -> Report:
         operations = on_operation or NullOperationSink()
         papers: list[Paper] = []
+        related_datasets: list[PublicDataset] = []
         evidence: list[EvidenceRecord] = []
 
         on_stage(RunStage.PLANNING)
@@ -112,6 +122,31 @@ class ResearchPipeline:
                     },
                 )
             operations.complete(operation_id, {"candidate_count": len(found)})
+
+        for connector in self.dataset_connectors:
+            operation_id = operations.start(
+                OperationUpdate(
+                    task_kind=OperationTaskKind.RESEARCH_RUN,
+                    operation_kind=OperationKind.SEARCH_DATASET_SOURCE,
+                    stage=RunStage.SEARCHING,
+                    metrics={"dataset_source_count": 1},
+                )
+            )
+            found_datasets: list[PublicDataset] = []
+            try:
+                found_datasets = await connector.search(brief)
+                related_datasets.extend(found_datasets)
+            except (httpx.HTTPError, ValueError) as exc:
+                logger.warning(
+                    "Dataset connector unavailable",
+                    extra={
+                        "connector": connector.name,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+            operations.complete(operation_id, {"dataset_count": len(found_datasets)})
+
+        related_datasets = self._deduplicate_datasets(related_datasets)[:30]
 
         on_stage(RunStage.DEDUPLICATING)
         operation_id = operations.start(
@@ -263,11 +298,24 @@ class ResearchPipeline:
             ],
             claims=claims,
             evidence=evidence,
+            related_datasets=related_datasets,
             controversies=controversies,
             gaps=gaps,
             recommendations=recommendations,
             papers=papers,
         )
+
+    @staticmethod
+    def _deduplicate_datasets(datasets: list[PublicDataset]) -> list[PublicDataset]:
+        unique: list[PublicDataset] = []
+        seen: set[tuple[str, str]] = set()
+        for dataset in datasets:
+            key = (dataset.source.casefold(), dataset.accession.casefold())
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(dataset)
+        return unique
 
     @staticmethod
     def _recommendations(evidence: list[EvidenceRecord]) -> list[Recommendation]:

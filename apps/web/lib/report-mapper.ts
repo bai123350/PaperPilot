@@ -21,6 +21,19 @@ interface ApiReport {
   themes?: string[];
   claims: Array<{ id: string; statement: string; evidence_ids: string[] }>;
   evidence: ApiEvidence[];
+  related_datasets?: Array<{
+    id: string;
+    accession: string;
+    title: string;
+    source: string;
+    modality: "bulk_rna" | "single_cell" | "spatial" | "atac_seq" | "genomics";
+    organism?: string | null;
+    sample_count?: number | null;
+    summary: string;
+    data_types: string[];
+    access: string;
+    url: string;
+  }>;
   recommendations: Array<{
     id: string;
     title: string;
@@ -46,6 +59,19 @@ export function mapReport(report: ApiReport): ReportViewModel {
     themes: report.themes ?? [],
     controversies: report.controversies ?? [],
     gaps: report.gaps ?? [],
+    relatedDatasets: (report.related_datasets ?? []).map((dataset) => ({
+      id: dataset.id,
+      accession: dataset.accession,
+      title: dataset.title,
+      source: dataset.source,
+      modality: dataset.modality,
+      organism: dataset.organism,
+      sampleCount: dataset.sample_count,
+      summary: dataset.summary,
+      dataTypes: dataset.data_types,
+      access: dataset.access,
+      url: dataset.url,
+    })),
     claims: report.claims.map((claim) => ({
       id: claim.id,
       statement: claim.statement,

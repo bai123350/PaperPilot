@@ -16,6 +16,8 @@ from paperpilot.domain.operations import (
 ALLOWED_METRICS = {
     "source_count",
     "candidate_count",
+    "dataset_count",
+    "dataset_source_count",
     "retained_count",
     "parsed_count",
     "evidence_count",
@@ -28,6 +30,7 @@ ALLOWED_METRICS = {
 OPERATION_TITLES = {
     OperationKind.STRUCTURE_QUESTION: "结构化研究问题",
     OperationKind.SEARCH_SOURCE: "检索文献来源",
+    OperationKind.SEARCH_DATASET_SOURCE: "检索公共数据集",
     OperationKind.DEDUPLICATE: "归一化标识并去重",
     OperationKind.SCREEN: "筛选相关文献",
     OperationKind.PARSE: "解析文献内容",
@@ -156,10 +159,13 @@ class OperationRecorder:
         if status is OperationStatus.RUNNING:
             return {
                 OperationKind.SEARCH_SOURCE: "正在检索一个文献来源。",
+                OperationKind.SEARCH_DATASET_SOURCE: "正在检索一个公共数据来源。",
                 OperationKind.LOOKUP_EVIDENCE: "正在当前研究运行中定位相关证据。",
             }.get(kind, f"正在{OPERATION_TITLES[kind]}。")
         if kind is OperationKind.SEARCH_SOURCE:
             return f"已完成文献来源检索，发现 {metrics.get('candidate_count', 0)} 篇候选文献。"
+        if kind is OperationKind.SEARCH_DATASET_SOURCE:
+            return f"已完成公共数据检索，发现 {metrics.get('dataset_count', 0)} 个相关数据集。"
         if kind is OperationKind.DEDUPLICATE:
             return f"已完成标识归一化与去重，保留 {metrics.get('retained_count', 0)} 篇文献。"
         if kind is OperationKind.SCREEN:

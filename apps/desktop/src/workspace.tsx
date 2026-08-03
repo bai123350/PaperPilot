@@ -4,7 +4,9 @@ import {
   Bot,
   CheckCircle2,
   Clock3,
+  Database,
   Download,
+  ExternalLink,
   FileText,
   FlaskConical,
   Gauge,
@@ -27,9 +29,11 @@ import {
 
 import type {
   ConversationMessage,
+  DatasetModality,
   EvidenceRecord,
   ExportFormat,
   Report,
+  PublicDataset,
   ResearchBrief,
   ResearchRun,
   RunOperation,
@@ -81,6 +85,57 @@ interface ResearchDirection {
   studies: DirectionStudy[];
 }
 
+interface KnowledgeGraphDirectionNode extends ResearchDirection {
+  x: number;
+  y: number;
+  color: string;
+}
+
+interface KnowledgeGraphPaperNode {
+  id: string;
+  title: string;
+  summary: string;
+  year: string;
+  directionIds: string[];
+  evidenceIds: string[];
+  authors: string[];
+  genes: string[];
+  findings: string[];
+  x: number;
+  y: number;
+  radius: number;
+  isCore: boolean;
+  score: number;
+}
+
+type KnowledgeGraphEntityKind = "author" | "gene" | "finding";
+
+interface KnowledgeGraphEntityNode {
+  id: string;
+  kind: KnowledgeGraphEntityKind;
+  label: string;
+  paperIds: string[];
+  x: number;
+  y: number;
+  radius: number;
+}
+
+interface KnowledgeGraphEdge {
+  id: string;
+  kind: "theme" | "association" | "progression" | KnowledgeGraphEntityKind;
+  sourceX: number;
+  sourceY: number;
+  targetX: number;
+  targetY: number;
+}
+
+interface KnowledgeGraphLayout {
+  directions: KnowledgeGraphDirectionNode[];
+  papers: KnowledgeGraphPaperNode[];
+  entities: KnowledgeGraphEntityNode[];
+  edges: KnowledgeGraphEdge[];
+}
+
 type PermissionMode = "ask" | "approve" | "full";
 
 const timelineItemPattern = /^((?:19|20)\d{2}(?:[–—-](?:19|20)\d{2})?)[：:]\s*(.*)$/;
@@ -111,6 +166,16 @@ const researchDirectionRules = [
     keywords: ["机制", "通路", "信号", "受体", "蛋白", "基因", "炎症", "免疫", "细胞", "死亡", "激活", "表达", "分子", "病理", "神经"],
   },
 ] as const;
+
+const knowledgeGraphSize = 1200;
+const knowledgeGraphCenter = knowledgeGraphSize / 2;
+const knowledgeGraphColors: Record<string, string> = {
+  translation: "#c77752",
+  clinical: "#5e86aa",
+  methods: "#846ca1",
+  mechanism: "#4f8c77",
+  general: "#23906e",
+};
 
 const permissionOptions: {
   value: PermissionMode;
@@ -663,6 +728,7 @@ function ReportDocument({
   onExport?: (format: ExportFormat) => Promise<void> | void;
   exportDisabled: boolean;
 }) {
+  const groupedTimeline = groupTimelineItems(report.timeline);
   return (
     <article className="report-document">
       <header className="report-header">
@@ -678,12 +744,10 @@ function ReportDocument({
       </p>
       <ReportSection title="进展时间线">
         <ol className="report-timeline">
-          {report.timeline.map((item, index) => {
-            const parsed = item.match(timelineItemPattern);
-            const studies = splitTimelineStudies(parsed?.[2] ?? item);
+          {groupedTimeline.map(({ period, studies }) => {
             return (
-              <li key={`${index}-${item}`}>
-                <time>{parsed?.[1] ?? "阶段"}</time>
+              <li key={period}>
+                <time>{period}</time>
                 <div className="timeline-studies">
                   {studies.map((study, studyIndex) => (
                     <p key={`${studyIndex}-${study}`}>
@@ -707,12 +771,19 @@ function ReportDocument({
         <ul>{report.themes.map((item) => <li key={item}><EvidenceText text={item} evidence={report.evidence} onEvidence={onEvidence} /></li>)}</ul>
       </ReportSection>
       <ReportSection title="主要结论">
-        {report.claims.map((claim) => (
-          <div className="claim" key={claim.id}>
-            <CheckCircle2 size={17} aria-hidden="true" />
-            <div><p><EvidenceText text={claim.statement} evidence={report.evidence} onEvidence={onEvidence} /></p><button className="evidence-link" type="button" onClick={() => onEvidence(claim.evidenceIds)}>查看 {claim.evidenceIds.length} 条证据</button></div>
-          </div>
-        ))}
+        <div className="claim-narrative">
+          {report.claims.map((claim) => (
+            <p key={claim.id}>
+              <EvidenceText text={claim.statement} evidence={report.evidence} onEvidence={onEvidence} />{" "}
+              <button className="evidence-link" type="button" onClick={() => onEvidence(claim.evidenceIds)}>
+                [{claim.evidenceIds.length} 条证据]
+              </button>
+            </p>
+          ))}
+        </div>
+      </ReportSection>
+      <ReportSection title="相关公共数据集">
+        <RelatedDatasets datasets={report.relatedDatasets ?? []} />
       </ReportSection>
       <ReportSection title="争议与局限">
         <ul>{[...report.controversies, ...report.limitations].map((item) => <li key={item}><EvidenceText text={item} evidence={report.evidence} onEvidence={onEvidence} /></li>)}</ul>
@@ -776,6 +847,91 @@ function ReportDocument({
       </ReportSection>
       <footer className="report-disclaimer">{report.disclaimer}</footer>
     </article>
+  );
+}
+
+const DATASET_MODALITIES: Array<{ value: DatasetModality; label: string }> = [
+  { value: "bulk_rna", label: "Bulk" },
+  { value: "single_cell", label: "单细胞" },
+  { value: "spatial", label: "空间转录组" },
+  { value: "atac_seq", label: "ATAC" },
+  { value: "genomics", label: "基因组" },
+];
+
+function RelatedDatasets({ datasets }: { datasets: PublicDataset[] }) {
+  const [activeModality, setActiveModality] = useState<DatasetModality | "all">("all");
+  const visibleDatasets = activeModality === "all"
+    ? datasets
+    : datasets.filter((dataset) => dataset.modality === activeModality);
+
+  return (
+    <div className="desktop-datasets">
+      <div className="desktop-dataset-filters" aria-label="按数据类型筛选">
+        <button
+          type="button"
+          className={activeModality === "all" ? "active" : ""}
+          aria-pressed={activeModality === "all"}
+          onClick={() => setActiveModality("all")}
+        >
+          全部 <span>{datasets.length}</span>
+        </button>
+        {DATASET_MODALITIES.map((option) => {
+          const count = datasets.filter((dataset) => dataset.modality === option.value).length;
+          return (
+            <button
+              type="button"
+              className={activeModality === option.value ? "active" : ""}
+              aria-pressed={activeModality === option.value}
+              onClick={() => setActiveModality(option.value)}
+              key={option.value}
+            >
+              {option.label} <span>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {visibleDatasets.length ? (
+        <div className="desktop-dataset-list" aria-live="polite">
+          {visibleDatasets.map((dataset) => (
+            <article className="desktop-dataset-card" data-testid="desktop-dataset-card" key={dataset.id}>
+              <div className="desktop-dataset-icon" aria-hidden="true"><Database size={17} /></div>
+              <div className="desktop-dataset-body">
+                <div className="desktop-dataset-eyebrow">
+                  <span>{dataset.source}</span><strong>{dataset.accession}</strong>
+                </div>
+                <h3>{dataset.title}</h3>
+                {dataset.summary ? <p>{dataset.summary}</p> : null}
+                <div className="desktop-dataset-meta">
+                  <span>{DATASET_MODALITIES.find((item) => item.value === dataset.modality)?.label}</span>
+                  {dataset.organism ? <span>{dataset.organism}</span> : null}
+                  {dataset.sampleCount != null ? <span>{dataset.sampleCount} 个样本</span> : null}
+                  {dataset.dataTypes.map((dataType) => <span key={dataType}>{dataType}</span>)}
+                </div>
+              </div>
+              <a
+                className="desktop-dataset-link"
+                href={dataset.url}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`在 ${dataset.source} 查看 ${dataset.accession}`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openUrl(dataset.url);
+                }}
+              >
+                查看数据 <ExternalLink size={14} aria-hidden="true" />
+              </a>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="desktop-dataset-empty" role="status">
+          <Database size={19} aria-hidden="true" />
+          <p>{datasets.length ? "当前类型暂无匹配数据集。" : "本次检索未发现可追溯的公共数据集。"}</p>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -850,6 +1006,268 @@ export function buildResearchDirections(timeline: string[]): ResearchDirection[]
   return directions;
 }
 
+export function groupTimelineItems(
+  timeline: string[],
+): Array<{ period: string; studies: string[] }> {
+  const grouped = new Map<string, string[]>();
+  timeline.forEach((item) => {
+    const parsed = item.match(timelineItemPattern);
+    const period = parsed?.[1] ?? "阶段";
+    const studies = splitTimelineStudies(parsed?.[2] ?? item);
+    grouped.set(period, [...(grouped.get(period) ?? []), ...studies]);
+  });
+  return Array.from(grouped, ([period, studies]) => ({ period, studies }));
+}
+
+function graphEvidenceRecords(text: string, evidence: EvidenceRecord[]): EvidenceRecord[] {
+  const tokens = Array.from(text.matchAll(/\bevidence-\d+\b/gi), (match) =>
+    match[0].toLowerCase(),
+  );
+  return evidence.filter((record) => {
+    const id = record.id.toLowerCase();
+    return tokens.some((token) => id === token || id.endsWith(`-${token}`));
+  });
+}
+
+function graphStudyLabel(text: string): string {
+  return text
+    .replace(/[（(]?\s*evidence-\d+\s*[）)]?/gi, "")
+    .replace(/[。！？!?；;]+$/, "")
+    .trim();
+}
+
+function graphLabel(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+}
+
+export function buildKnowledgeGraphLayout(
+  directions: ResearchDirection[],
+  evidence: EvidenceRecord[],
+): KnowledgeGraphLayout {
+  const directionNodes: KnowledgeGraphDirectionNode[] = directions.map((direction, index) => {
+    const angle = -Math.PI / 2 + (index * Math.PI * 2) / directions.length;
+    return {
+      ...direction,
+      x: knowledgeGraphCenter + Math.cos(angle) * 200,
+      y: knowledgeGraphCenter + Math.sin(angle) * 200,
+      color: knowledgeGraphColors[direction.id] ?? knowledgeGraphColors.general,
+    };
+  });
+
+  const papers = new Map<
+    string,
+    Omit<KnowledgeGraphPaperNode, "x" | "y" | "radius" | "isCore">
+  >();
+  directions.forEach((direction) => {
+    direction.studies.forEach((study, studyIndex) => {
+      const records = graphEvidenceRecords(study.text, evidence);
+      const candidates = records.length > 0
+        ? records.map((record) => ({
+            id: record.id,
+            title: record.paperTitle,
+            evidenceIds: [record.id],
+            authors: record.authors,
+            genes: record.genes,
+            findings: record.findings,
+            score: record.confidence + record.supports.length * 0.45,
+          }))
+        : [{
+            id: `${direction.id}-${study.year}-${studyIndex}-${graphStudyLabel(study.text)}`,
+            title: graphStudyLabel(study.text),
+            evidenceIds: [] as string[],
+            authors: [] as string[],
+            genes: [] as string[],
+            findings: [] as string[],
+            score: 0,
+          }];
+
+      candidates.forEach((candidate) => {
+        const existing = papers.get(candidate.id);
+        if (existing) {
+          if (!existing.directionIds.includes(direction.id)) {
+            existing.directionIds.push(direction.id);
+          }
+          existing.score = Math.max(existing.score, candidate.score);
+          existing.authors = Array.from(new Set([...existing.authors, ...candidate.authors]));
+          existing.genes = Array.from(new Set([...existing.genes, ...candidate.genes]));
+          existing.findings = Array.from(new Set([...existing.findings, ...candidate.findings]));
+          return;
+        }
+        papers.set(candidate.id, {
+          id: candidate.id,
+          title: candidate.title,
+          summary: graphStudyLabel(study.text),
+          year: study.year,
+          directionIds: [direction.id],
+          evidenceIds: candidate.evidenceIds,
+          authors: candidate.authors,
+          genes: candidate.genes,
+          findings: candidate.findings,
+          score: candidate.score,
+        });
+      });
+    });
+  });
+
+  const positionedPapers: KnowledgeGraphPaperNode[] = [];
+  directionNodes.forEach((direction, directionIndex) => {
+    const primaryPapers = Array.from(papers.values()).filter(
+      (paper) => paper.directionIds[0] === direction.id,
+    );
+    const directionAngle = -Math.PI / 2 + (directionIndex * Math.PI * 2) / directions.length;
+    const sectorSpan = Math.min(1.15, ((Math.PI * 2) / directions.length) * 0.76);
+    const papersPerRing = 12;
+    primaryPapers.forEach((paper, paperIndex) => {
+      const ring = Math.floor(paperIndex / papersPerRing);
+      const ringStart = ring * papersPerRing;
+      const ringCount = Math.min(papersPerRing, primaryPapers.length - ringStart);
+      const ringIndex = paperIndex - ringStart;
+      const offset = ringCount === 1
+        ? 0
+        : -sectorSpan / 2 + (ringIndex * sectorSpan) / (ringCount - 1);
+      const radius = 330 + ring * 42;
+      positionedPapers.push({
+        ...paper,
+        x: knowledgeGraphCenter + Math.cos(directionAngle + offset) * radius,
+        y: knowledgeGraphCenter + Math.sin(directionAngle + offset) * radius,
+        radius: 5,
+        isCore: false,
+      });
+    });
+  });
+
+  const coreCount = Math.min(6, Math.max(1, Math.ceil(positionedPapers.length * 0.08)));
+  const coreIds = new Set(
+    [...positionedPapers]
+      .sort((left, right) =>
+        right.directionIds.length - left.directionIds.length
+        || right.score - left.score
+        || left.year.localeCompare(right.year))
+      .slice(0, coreCount)
+      .map((paper) => paper.id),
+  );
+  positionedPapers.forEach((paper) => {
+    paper.isCore = coreIds.has(paper.id);
+    paper.radius = 5 + Math.min(4, paper.score * 0.9) + (paper.isCore ? 2 : 0);
+  });
+
+  const paperById = new Map(positionedPapers.map((paper) => [paper.id, paper]));
+  const entityCandidates = new Map<
+    string,
+    Omit<KnowledgeGraphEntityNode, "x" | "y" | "radius">
+  >();
+  const registerEntities = (
+    paper: KnowledgeGraphPaperNode,
+    kind: KnowledgeGraphEntityKind,
+    values: string[],
+  ) => {
+    values.forEach((value) => {
+      const label = value.trim();
+      if (!label) return;
+      const id = `${kind}:${label.toLowerCase()}`;
+      const existing = entityCandidates.get(id);
+      if (existing) {
+        if (!existing.paperIds.includes(paper.id)) existing.paperIds.push(paper.id);
+        return;
+      }
+      entityCandidates.set(id, { id, kind, label, paperIds: [paper.id] });
+    });
+  };
+  positionedPapers.forEach((paper) => {
+    registerEntities(paper, "author", paper.authors);
+    registerEntities(paper, "gene", paper.genes);
+    registerEntities(paper, "finding", paper.findings);
+  });
+  const selectedEntities = (["gene", "author", "finding"] as const).flatMap((kind) =>
+    Array.from(entityCandidates.values())
+      .filter((entity) => entity.kind === kind)
+      .sort((left, right) =>
+        right.paperIds.length - left.paperIds.length || left.label.localeCompare(right.label))
+      .slice(0, 40),
+  );
+  const entities: KnowledgeGraphEntityNode[] = [];
+  directionNodes.forEach((direction, directionIndex) => {
+    const directionEntities = selectedEntities
+      .filter((entity) => {
+        const firstPaper = paperById.get(entity.paperIds[0]);
+        return firstPaper?.directionIds[0] === direction.id;
+      })
+      .slice(0, 48);
+    const directionAngle = -Math.PI / 2 + (directionIndex * Math.PI * 2) / directions.length;
+    const sectorSpan = Math.min(1.18, ((Math.PI * 2) / directions.length) * 0.82);
+    const entitiesPerRing = 16;
+    directionEntities.forEach((entity, entityIndex) => {
+      const ring = Math.floor(entityIndex / entitiesPerRing);
+      const ringStart = ring * entitiesPerRing;
+      const ringCount = Math.min(entitiesPerRing, directionEntities.length - ringStart);
+      const ringIndex = entityIndex - ringStart;
+      const offset = ringCount === 1
+        ? 0
+        : -sectorSpan / 2 + (ringIndex * sectorSpan) / (ringCount - 1);
+      const radius = 500 + ring * 34;
+      entities.push({
+        ...entity,
+        x: knowledgeGraphCenter + Math.cos(directionAngle + offset) * radius,
+        y: knowledgeGraphCenter + Math.sin(directionAngle + offset) * radius,
+        radius: entity.kind === "gene" ? 8 : entity.kind === "author" ? 6 : 5,
+      });
+    });
+  });
+  const edges: KnowledgeGraphEdge[] = directionNodes.map((direction) => ({
+    id: `theme-${direction.id}`,
+    kind: "theme",
+    sourceX: knowledgeGraphCenter,
+    sourceY: knowledgeGraphCenter,
+    targetX: direction.x,
+    targetY: direction.y,
+  }));
+
+  directionNodes.forEach((direction) => {
+    const associatedPapers = positionedPapers
+      .filter((paper) => paper.directionIds.includes(direction.id))
+      .sort((left, right) => left.year.localeCompare(right.year));
+    associatedPapers.forEach((paper) => {
+      edges.push({
+        id: `association-${direction.id}-${paper.id}`,
+        kind: "association",
+        sourceX: direction.x,
+        sourceY: direction.y,
+        targetX: paper.x,
+        targetY: paper.y,
+      });
+    });
+    associatedPapers.slice(1).forEach((paper, index) => {
+      const previous = paperById.get(associatedPapers[index].id);
+      if (!previous) return;
+      edges.push({
+        id: `progression-${direction.id}-${previous.id}-${paper.id}`,
+        kind: "progression",
+        sourceX: previous.x,
+        sourceY: previous.y,
+        targetX: paper.x,
+        targetY: paper.y,
+      });
+    });
+  });
+
+  entities.forEach((entity) => {
+    entity.paperIds.forEach((paperId) => {
+      const paper = paperById.get(paperId);
+      if (!paper) return;
+      edges.push({
+        id: `${entity.kind}-${paper.id}-${entity.id}`,
+        kind: entity.kind,
+        sourceX: paper.x,
+        sourceY: paper.y,
+        targetX: entity.x,
+        targetY: entity.y,
+      });
+    });
+  });
+
+  return { directions: directionNodes, papers: positionedPapers, entities, edges };
+}
+
 function ResearchDirectionMap({
   title,
   timeline,
@@ -861,63 +1279,253 @@ function ResearchDirectionMap({
   evidence: EvidenceRecord[];
   onEvidence: (ids: string[]) => void;
 }) {
-  const directions = buildResearchDirections(timeline);
+  const directions = useMemo(() => buildResearchDirections(timeline), [timeline]);
+  const graph = useMemo(
+    () => buildKnowledgeGraphLayout(directions, evidence),
+    [directions, evidence],
+  );
+  const [activeGraphNode, setActiveGraphNode] = useState<{
+    kind: "paper" | "entity";
+    id: string;
+  } | null>(null);
+  const [graphZoom, setGraphZoom] = useState(1.5);
   if (directions.length === 0) return null;
+  const defaultPaper = graph.papers.find((paper) => paper.isCore) ?? graph.papers[0];
+  const activePaper = activeGraphNode?.kind === "paper"
+    ? graph.papers.find((paper) => paper.id === activeGraphNode.id)
+    : activeGraphNode
+      ? undefined
+      : defaultPaper;
+  const activeEntity = activeGraphNode?.kind === "entity"
+    ? graph.entities.find((entity) => entity.id === activeGraphNode.id)
+    : undefined;
+  const directionById = new Map(graph.directions.map((direction) => [direction.id, direction]));
+  const centerTitle = graphLabel(title, 14);
+  const centerTitleLines = [centerTitle.slice(0, 7), centerTitle.slice(7)].filter(Boolean);
+
+  function activatePaper(paper: KnowledgeGraphPaperNode) {
+    setActiveGraphNode({ kind: "paper", id: paper.id });
+    if (paper.evidenceIds.length > 0) onEvidence(paper.evidenceIds);
+  }
 
   return (
     <section className="research-direction-map" aria-labelledby="research-direction-title">
       <header>
         <span><GitBranch size={17} aria-hidden="true" /></span>
         <div>
-          <h3 id="research-direction-title">研究脉络云图</h3>
-          <p>中心主题向外延展为研究方向，相似研究聚集在同一分支并按年份排列。</p>
+          <h3 id="research-direction-title">研究知识图谱</h3>
+          <p>连接研究方向、论文、作者、基因与关键结果，发现核心文献和实体聚类。</p>
         </div>
       </header>
-      <div className="direction-cloud-scroll">
-        <div
-          className="direction-cloud"
-          role="group"
-          aria-label={`${title}的研究脉络云图，共${directions.length}个方向`}
-        >
-          <div className="cloud-hub">
-            <span>研究主题</span>
-            <strong>{title}</strong>
-            <small>{directions.length} 个方向</small>
+      <div className="knowledge-graph-toolbar" aria-label="图谱缩放">
+        <button
+          aria-label="缩小图谱"
+          disabled={graphZoom <= 1}
+          onClick={() => setGraphZoom((value) => Math.max(1, value - 0.25))}
+          type="button"
+        >−</button>
+        <button
+          aria-label="重置图谱缩放"
+          onClick={() => setGraphZoom(1.5)}
+          type="button"
+        >{Math.round(graphZoom * 100)}%</button>
+        <button
+          aria-label="放大图谱"
+          disabled={graphZoom >= 2.5}
+          onClick={() => setGraphZoom((value) => Math.min(2.5, value + 0.25))}
+          type="button"
+        >+</button>
+      </div>
+      <div
+        aria-label="研究知识图谱，可横向和纵向滚动"
+        className="knowledge-graph-scroll"
+        role="region"
+        tabIndex={0}
+      >
+        <div className="knowledge-graph" style={{ width: `${graphZoom * 100}%` }}>
+          <div className="knowledge-graph-legend" aria-label="图谱图例">
+            <span><i className="legend-topic" />中心主题</span>
+            <span><i className="legend-direction" />研究方向</span>
+            <span><i className="legend-paper" />论文</span>
+            <span><i className="legend-author" />作者</span>
+            <span><i className="legend-gene" />基因/蛋白</span>
+            <span><i className="legend-finding" />研究结果</span>
+            <span><i className="legend-core" />核心文献</span>
+            <span><i className="legend-edge" />主题关联</span>
+            <span><i className="legend-progression" />同方向演进</span>
           </div>
-          <div className="cloud-branches">
-            {directions.map((direction, directionIndex) => {
-              const years = direction.studies.map((study) => study.year);
-              const yearRange = years.length > 1 ? `${years[0]}–${years.at(-1)}` : years[0];
+          <svg
+            aria-label={`${title}的研究知识图谱，共${graph.directions.length}个方向、${graph.papers.length}篇论文、${graph.entities.length}个结构化实体`}
+            data-testid="research-knowledge-graph"
+            role="group"
+            viewBox={`0 0 ${knowledgeGraphSize} ${knowledgeGraphSize}`}
+          >
+            <g className="knowledge-graph-edges" aria-hidden="true">
+              {graph.edges.map((edge) => (
+                <line
+                  className={`knowledge-edge knowledge-edge-${edge.kind}`}
+                  key={edge.id}
+                  x1={edge.sourceX}
+                  x2={edge.targetX}
+                  y1={edge.sourceY}
+                  y2={edge.targetY}
+                />
+              ))}
+            </g>
+            <g className="knowledge-center-node" aria-label={`中心主题：${title}`}>
+              <circle cx={knowledgeGraphCenter} cy={knowledgeGraphCenter} r="78" />
+              <text x={knowledgeGraphCenter} y={knowledgeGraphCenter - 31}>
+                <tspan x={knowledgeGraphCenter}>研究主题</tspan>
+                {centerTitleLines.map((line) => (
+                  <tspan
+                    className="knowledge-center-title"
+                    dy="20"
+                    key={line}
+                    x={knowledgeGraphCenter}
+                  >
+                    {line}
+                  </tspan>
+                ))}
+                <tspan dy="19" x={knowledgeGraphCenter}>
+                  {graph.papers.length} 篇论文 · {graph.entities.length} 个实体
+                </tspan>
+              </text>
+            </g>
+            {graph.directions.map((direction) => (
+              <g
+                aria-label={`研究方向：${direction.label}，${direction.studies.length}项`}
+                className="knowledge-direction-node"
+                data-testid="knowledge-direction-node"
+                key={direction.id}
+              >
+                <circle
+                  cx={direction.x}
+                  cy={direction.y}
+                  fill={direction.color}
+                  r="49"
+                />
+                <text x={direction.x} y={direction.y - 4}>
+                  <tspan x={direction.x}>{direction.label}</tspan>
+                  <tspan dy="18" x={direction.x}>{direction.studies.length} 项</tspan>
+                </text>
+              </g>
+            ))}
+            {graph.papers.map((paper) => {
+              const direction = directionById.get(paper.directionIds[0]);
               return (
-                <article
-                  className={`cloud-branch cloud-branch-${direction.id}`}
-                  data-testid="research-direction-branch"
-                  key={direction.id}
+                <g
+                  aria-label={`${paper.isCore ? "核心文献，" : ""}${paper.year}，${paper.title}`}
+                  className={`knowledge-paper-node${paper.isCore ? " is-core" : ""}${paper.evidenceIds.length > 0 ? " has-evidence" : ""}`}
+                  data-testid="knowledge-paper-node"
+                  key={paper.id}
+                  onClick={() => activatePaper(paper)}
+                  onFocus={() => setActiveGraphNode({ kind: "paper", id: paper.id })}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    activatePaper(paper);
+                  }}
+                  onMouseEnter={() => setActiveGraphNode({ kind: "paper", id: paper.id })}
+                  role="button"
+                  tabIndex={0}
                 >
-                  <div className="cloud-direction-node">
-                    <span>{String(directionIndex + 1).padStart(2, "0")}</span>
-                    <strong>{direction.label}</strong>
-                    <small>{direction.studies.length} 项 · {yearRange}</small>
-                    <p>{direction.description}</p>
-                  </div>
-                  <div className="cloud-study-chain">
-                    {direction.studies.map((study, studyIndex) => (
-                      <div className="cloud-study-node" key={`${study.year}-${studyIndex}-${study.text}`}>
-                        <time>{study.year}</time>
-                        <p>
-                          <EvidenceText text={study.text} evidence={evidence} onEvidence={onEvidence} />
-                          {/[。！？!?；;]$/.test(study.text.trim()) ? null : "。"}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </article>
+                  <title>{`${paper.year} · ${paper.title}`}</title>
+                  {paper.isCore ? (
+                    <circle
+                      className="knowledge-core-ring"
+                      cx={paper.x}
+                      cy={paper.y}
+                      r={paper.radius + 5}
+                    />
+                  ) : null}
+                  <circle
+                    cx={paper.x}
+                    cy={paper.y}
+                    fill={direction?.color ?? knowledgeGraphColors.general}
+                    r={paper.radius}
+                  />
+                  {paper.isCore ? (
+                    <text x={paper.x} y={paper.y + paper.radius + 15}>{paper.year}</text>
+                  ) : null}
+                </g>
               );
             })}
-          </div>
+            {graph.entities.map((entity) => {
+              const kindLabel = entity.kind === "author"
+                ? "作者"
+                : entity.kind === "gene"
+                  ? "基因或蛋白"
+                  : "研究结果";
+              return (
+                <g
+                  aria-label={`${kindLabel}：${entity.label}，关联${entity.paperIds.length}篇论文`}
+                  className={`knowledge-entity-node knowledge-entity-${entity.kind}`}
+                  data-testid="knowledge-entity-node"
+                  key={entity.id}
+                  onClick={() => setActiveGraphNode({ kind: "entity", id: entity.id })}
+                  onFocus={() => setActiveGraphNode({ kind: "entity", id: entity.id })}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    setActiveGraphNode({ kind: "entity", id: entity.id });
+                  }}
+                  onMouseEnter={() => setActiveGraphNode({ kind: "entity", id: entity.id })}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <title>{`${kindLabel} · ${entity.label} · ${entity.paperIds.length}篇论文`}</title>
+                  <circle cx={entity.x} cy={entity.y} r={entity.radius} />
+                  {entity.kind === "gene" || entity.paperIds.length > 1 ? (
+                    <text x={entity.x} y={entity.y + entity.radius + 13}>
+                      {graphLabel(entity.label, 11)}
+                    </text>
+                  ) : null}
+                </g>
+              );
+            })}
+          </svg>
         </div>
       </div>
-      <p className="direction-map-note">从左向右阅读研究演进；云图归并基于当前报告文本，不替代证据审计。</p>
+      {activePaper ? (
+        <div className="knowledge-graph-detail" aria-live="polite">
+          <div>
+            <span>{activePaper.isCore ? "核心文献" : "论文节点"} · {activePaper.year}</span>
+            <strong>{activePaper.title}</strong>
+          </div>
+          <p>{activePaper.summary}</p>
+          <small>
+            {activePaper.directionIds
+              .map((id) => directionById.get(id)?.label)
+              .filter(Boolean)
+              .join(" · ")}
+            {activePaper.evidenceIds.length > 0 ? " · 点击节点查看证据" : " · 暂无可展开证据"}
+          </small>
+        </div>
+      ) : null}
+      {activeEntity ? (
+        <div className="knowledge-graph-detail" aria-live="polite">
+          <div>
+            <span>
+              {activeEntity.kind === "author"
+                ? "作者节点"
+                : activeEntity.kind === "gene"
+                  ? "基因/蛋白节点"
+                  : "研究结果节点"}
+            </span>
+            <strong>{activeEntity.label}</strong>
+          </div>
+          <p>
+            关联 {activeEntity.paperIds.length} 篇论文：
+            {activeEntity.paperIds
+              .map((id) => graph.papers.find((paper) => paper.id === id)?.title)
+              .filter(Boolean)
+              .slice(0, 3)
+              .join("；")}
+          </p>
+          <small>共享实体只显示一个节点，并连接所有包含它的论文。</small>
+        </div>
+      ) : null}
+      <p className="direction-map-note">作者来自文献数据库元数据；基因/蛋白与研究结果来自当前摘要的结构化证据抽取。引用关系需可靠引用数据后再展示，不从文本中猜测。</p>
     </section>
   );
 }
@@ -1017,7 +1625,7 @@ function EvidenceDrawer({ evidence, onClose }: { evidence: EvidenceRecord; onClo
     <aside className="evidence-drawer" aria-label="证据详情">
       <header><div><span className="pane-kicker">Evidence Record</span><h2>{evidence.paperTitle}</h2></div><button type="button" onClick={onClose} aria-label="关闭证据"><X size={18} /></button></header>
       <blockquote>{evidence.excerpt}</blockquote>
-      <dl><div><dt>定位</dt><dd>{evidence.locator}</dd></div><div><dt>论文标识</dt><dd><PaperIdentifier paperId={evidence.paperId} /></dd></div><div><dt>期刊</dt><dd>{evidence.journal ?? "未获取"}{evidence.issn ? `（${evidence.issn}）` : ""}</dd></div><div><dt>影响因子</dt><dd>{evidence.impactFactor ?? "未匹配"}{evidence.impactFactorSource ? ` · ${evidence.impactFactorSource}` : ""}</dd></div><div><dt>证据类型</dt><dd>{evidence.evidenceType}</dd></div><div><dt>置信度</dt><dd>{Math.round(evidence.confidence * 100)}%</dd></div></dl>
+      <dl><div><dt>定位</dt><dd>{evidence.locator}</dd></div><div><dt>论文标识</dt><dd><PaperIdentifier paperId={evidence.paperId} /></dd></div><div><dt>作者</dt><dd>{evidence.authors.join("、") || "未获取"}</dd></div><div><dt>基因/蛋白</dt><dd className="evidence-entity-list">{evidence.genes.length > 0 ? evidence.genes.map((gene) => <span key={gene}>{gene}</span>) : "未提取"}</dd></div><div><dt>关键结果</dt><dd>{evidence.findings.length > 0 ? <ul>{evidence.findings.map((finding) => <li key={finding}>{finding}</li>)}</ul> : "未提取"}</dd></div><div><dt>期刊</dt><dd>{evidence.journal ?? "未获取"}{evidence.issn ? `（${evidence.issn}）` : ""}</dd></div><div><dt>影响因子</dt><dd>{evidence.impactFactor ?? "未匹配"}{evidence.impactFactorSource ? ` · ${evidence.impactFactorSource}` : ""}</dd></div><div><dt>证据类型</dt><dd>{evidence.evidenceType}</dd></div><div><dt>置信度</dt><dd>{Math.round(evidence.confidence * 100)}%</dd></div></dl>
     </aside>
   );
 }

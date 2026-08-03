@@ -5,12 +5,19 @@ import {
   ArrowRight,
   BookOpenText,
   CheckCircle2,
+  Database,
+  ExternalLink,
   FlaskConical,
   ShieldCheck,
   X,
 } from "lucide-react";
 
-import type { EvidenceView, ReportViewModel } from "../lib/types";
+import type {
+  DatasetModality,
+  EvidenceView,
+  PublicDatasetView,
+  ReportViewModel,
+} from "../lib/types";
 
 interface ReportViewProps {
   report: ReportViewModel;
@@ -71,11 +78,13 @@ export function ReportView({ report }: ReportViewProps) {
           </div>
         </section>
 
+        <RelatedDatasets datasets={report.relatedDatasets ?? []} />
+
         {report.gaps?.length ? (
           <section className="report-section" aria-labelledby="gaps-heading">
             <div className="section-heading">
               <div>
-                <span className="section-number">02</span>
+                <span className="section-number">03</span>
                 <h2 id="gaps-heading">证据空白</h2>
               </div>
             </div>
@@ -88,7 +97,7 @@ export function ReportView({ report }: ReportViewProps) {
         <section className="report-section" aria-labelledby="recommendations-heading">
           <div className="section-heading">
             <div>
-              <span className="section-number">03</span>
+              <span className="section-number">04</span>
               <h2 id="recommendations-heading">下一步研究方案</h2>
             </div>
             <span className="section-meta">按验证成本排序</span>
@@ -122,6 +131,101 @@ export function ReportView({ report }: ReportViewProps) {
         <EvidenceDrawer evidence={selectedEvidence} onClose={() => setSelectedEvidenceId(null)} />
       ) : null}
     </div>
+  );
+}
+
+const DATASET_MODALITIES: Array<{ value: DatasetModality; label: string }> = [
+  { value: "bulk_rna", label: "Bulk" },
+  { value: "single_cell", label: "单细胞" },
+  { value: "spatial", label: "空间转录组" },
+  { value: "atac_seq", label: "ATAC" },
+  { value: "genomics", label: "基因组" },
+];
+
+function RelatedDatasets({ datasets }: { datasets: PublicDatasetView[] }) {
+  const [activeModality, setActiveModality] = useState<DatasetModality | "all">("all");
+  const visibleDatasets = activeModality === "all"
+    ? datasets
+    : datasets.filter((dataset) => dataset.modality === activeModality);
+  const sources = Array.from(new Set(datasets.map((dataset) => dataset.source)));
+
+  return (
+    <section className="report-section dataset-section" aria-labelledby="datasets-heading">
+      <div className="section-heading">
+        <div>
+          <span className="section-number">02</span>
+          <h2 id="datasets-heading">相关公共数据集</h2>
+        </div>
+        <span className="section-meta">
+          {datasets.length ? `${datasets.length} 个数据集 · ${sources.join(" · ")}` : "未发现匹配数据集"}
+        </span>
+      </div>
+
+      <div className="dataset-filters" aria-label="按数据类型筛选">
+        <button
+          className={activeModality === "all" ? "active" : ""}
+          type="button"
+          aria-pressed={activeModality === "all"}
+          onClick={() => setActiveModality("all")}
+        >
+          全部 <span>{datasets.length}</span>
+        </button>
+        {DATASET_MODALITIES.map((option) => {
+          const count = datasets.filter((dataset) => dataset.modality === option.value).length;
+          return (
+            <button
+              className={activeModality === option.value ? "active" : ""}
+              type="button"
+              aria-pressed={activeModality === option.value}
+              onClick={() => setActiveModality(option.value)}
+              key={option.value}
+            >
+              {option.label} <span>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {visibleDatasets.length ? (
+        <div className="dataset-list" aria-live="polite">
+          {visibleDatasets.map((dataset) => (
+            <article className="dataset-card" data-testid="dataset-card" key={dataset.id}>
+              <div className="dataset-icon" aria-hidden="true">
+                <Database size={19} />
+              </div>
+              <div className="dataset-body">
+                <div className="dataset-eyebrow">
+                  <span>{dataset.source}</span>
+                  <strong>{dataset.accession}</strong>
+                </div>
+                <h3>{dataset.title}</h3>
+                {dataset.summary ? <p>{dataset.summary}</p> : null}
+                <div className="dataset-meta">
+                  <span>{DATASET_MODALITIES.find((item) => item.value === dataset.modality)?.label}</span>
+                  {dataset.organism ? <span>{dataset.organism}</span> : null}
+                  {dataset.sampleCount != null ? <span>{dataset.sampleCount} 个样本</span> : null}
+                  {dataset.dataTypes.map((dataType) => <span key={dataType}>{dataType}</span>)}
+                </div>
+              </div>
+              <a
+                className="dataset-link"
+                href={dataset.url}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`在 ${dataset.source} 查看 ${dataset.accession}`}
+              >
+                查看数据 <ExternalLink size={15} aria-hidden="true" />
+              </a>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="dataset-empty" role="status">
+          <Database size={21} aria-hidden="true" />
+          <p>{datasets.length ? "当前类型暂无匹配数据集。" : "本次检索未发现可追溯的公共数据集。"}</p>
+        </div>
+      )}
+    </section>
   );
 }
 

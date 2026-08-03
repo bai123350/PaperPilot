@@ -60,8 +60,16 @@ def test_project_run_report_and_evidence_flow(tmp_path: Path) -> None:
         report_response = client.get(f"/v1/runs/{run['id']}/report", headers=headers)
         assert report_response.status_code == 200
         report = report_response.json()
-        assert report["schema_version"] == "1.0"
+        assert report["schema_version"] == "1.1"
         assert len(report["recommendations"]) == 3
+        assert len(report["related_datasets"]) == 5
+        assert {item["modality"] for item in report["related_datasets"]} == {
+            "bulk_rna",
+            "single_cell",
+            "spatial",
+            "atac_seq",
+            "genomics",
+        }
 
         evidence_response = client.get(f"/v1/runs/{run['id']}/evidence", headers=headers)
         assert evidence_response.status_code == 200

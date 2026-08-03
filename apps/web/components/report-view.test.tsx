@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { ReportView } from "./report-view";
@@ -8,7 +8,7 @@ describe("ReportView", () => {
     render(
       <ReportView
         report={{
-          schemaVersion: "1.0",
+          schemaVersion: "1.1",
           title: "Circulating biomarkers in treatment response",
           summary: "Prospective evidence is promising but externally validated cohorts remain limited.",
           claims: [
@@ -25,6 +25,34 @@ describe("ReportView", () => {
               excerpt: "The biomarker achieved an area under the curve of 0.82.",
               locator: "Results, p. 7",
               pmid: "12345678",
+            },
+          ],
+          relatedDatasets: [
+            {
+              id: "dataset-single-cell",
+              accession: "GSE12345",
+              title: "Single-cell validation atlas",
+              source: "NCBI GEO",
+              modality: "single_cell",
+              organism: "Homo sapiens",
+              sampleCount: 24,
+              summary: "A public single-cell cohort.",
+              dataTypes: ["scRNA-seq"],
+              access: "open",
+              url: "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE12345",
+            },
+            {
+              id: "dataset-atac",
+              accession: "ENCSR123ABC",
+              title: "Chromatin accessibility atlas",
+              source: "ENCODE",
+              modality: "atac_seq",
+              organism: "Homo sapiens",
+              sampleCount: 8,
+              summary: "Released ATAC-seq data.",
+              dataTypes: ["ATAC-seq"],
+              access: "open",
+              url: "https://www.encodeproject.org/experiments/ENCSR123ABC/",
             },
           ],
           recommendations: ["Prospective validation", "External replication", "Assay harmonization"].map(
@@ -46,6 +74,12 @@ describe("ReportView", () => {
 
     expect(screen.getByText("Prospective cohorts report useful discrimination.")).toBeInTheDocument();
     expect(screen.getAllByTestId("recommendation-card")).toHaveLength(3);
+    expect(screen.getAllByTestId("dataset-card")).toHaveLength(2);
     expect(screen.getByRole("button", { name: /查看证据/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "ATAC 1" }));
+    expect(screen.getAllByTestId("dataset-card")).toHaveLength(1);
+    expect(screen.getByText("Chromatin accessibility atlas")).toBeInTheDocument();
+    expect(screen.queryByText("Single-cell validation atlas")).not.toBeInTheDocument();
   });
 });

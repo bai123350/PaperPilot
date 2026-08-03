@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf};
 
 use paperpilot_desktop::contracts::{
-    Claim, ConversationMessage, EvidenceRecord, ExportFormat, ExportResult, MessageAction,
-    MessageResult, Project, Recommendation, Report, ResearchBrief, ResearchRun, RunEvent,
-    RunOperation, RunSnapshot, RunStatus,
+    Claim, ConversationMessage, DatasetModality, EvidenceRecord, ExportFormat, ExportResult,
+    MessageAction, MessageResult, Project, PublicDataset, Recommendation, Report, ResearchBrief,
+    ResearchRun, RunEvent, RunOperation, RunSnapshot, RunStatus,
 };
 use ts_rs::TS;
 
@@ -25,6 +25,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         EvidenceRecord::decl(),
         Claim::decl(),
         Recommendation::decl(),
+        DatasetModality::decl(),
+        PublicDataset::decl(),
         Report::decl(),
     ];
     let declarations = declarations.map(|declaration| format!("export {declaration}"));
