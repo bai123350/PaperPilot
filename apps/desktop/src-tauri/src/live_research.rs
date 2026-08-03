@@ -10,11 +10,12 @@ use crate::{
     cancellation::CancellationToken,
     conclusion_skills::{ACTIVE_CONCLUSION_SKILLS, conclusion_skill_guidance},
     contracts::{
-        Claim, ConversationMessage, EvidenceRecord, Recommendation, Report, ResearchBrief,
-        validate_report,
+        Claim, ConversationMessage, EvidenceRecord, PublicDataset, Recommendation, Report,
+        ResearchBrief, validate_report,
     },
     impact_factor::ImpactFactorLookup,
     provider_settings::ModelClientConfig,
+    public_datasets,
 };
 
 const EUROPE_PMC_PAGE_SIZE: usize = 1_000;
@@ -110,6 +111,10 @@ pub trait LiveResearchBackend: Send + Sync {
         _on_trace: &mut dyn FnMut(LiveResearchTrace),
     ) -> Result<Vec<EvidenceRecord>, LiveResearchError> {
         self.collect_evidence(run_id, brief)
+    }
+
+    fn search_public_datasets(&self, _brief: &ResearchBrief) -> Vec<PublicDataset> {
+        Vec::new()
     }
 
     fn synthesize_report(
@@ -1106,6 +1111,10 @@ impl LiveResearchBackend for OpenAiResearchBackend {
         on_trace: &mut dyn FnMut(LiveResearchTrace),
     ) -> Result<Vec<EvidenceRecord>, LiveResearchError> {
         self.collect_evidence_internal(run_id, brief, on_trace)
+    }
+
+    fn search_public_datasets(&self, brief: &ResearchBrief) -> Vec<PublicDataset> {
+        public_datasets::search_public_datasets(&self.agent, brief)
     }
 
     fn synthesize_report(
@@ -2226,6 +2235,7 @@ impl ReportDraft {
             limitations: self.limitations,
             gaps: self.gaps,
             recommendations: self.recommendations,
+            related_datasets: Vec::new(),
             evidence,
             references,
             disclaimer: "本报告仅供科研用途，不构成临床诊断或治疗建议。".into(),

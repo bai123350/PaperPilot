@@ -4,7 +4,9 @@ import {
   Bot,
   CheckCircle2,
   Clock3,
+  Database,
   Download,
+  ExternalLink,
   FileText,
   FlaskConical,
   Gauge,
@@ -27,9 +29,11 @@ import {
 
 import type {
   ConversationMessage,
+  DatasetModality,
   EvidenceRecord,
   ExportFormat,
   Report,
+  PublicDataset,
   ResearchBrief,
   ResearchRun,
   RunOperation,
@@ -775,6 +779,9 @@ function ReportDocument({
           </div>
         ))}
       </ReportSection>
+      <ReportSection title="相关公共数据集">
+        <RelatedDatasets datasets={report.relatedDatasets ?? []} />
+      </ReportSection>
       <ReportSection title="争议与局限">
         <ul>{[...report.controversies, ...report.limitations].map((item) => <li key={item}><EvidenceText text={item} evidence={report.evidence} onEvidence={onEvidence} /></li>)}</ul>
       </ReportSection>
@@ -837,6 +844,91 @@ function ReportDocument({
       </ReportSection>
       <footer className="report-disclaimer">{report.disclaimer}</footer>
     </article>
+  );
+}
+
+const DATASET_MODALITIES: Array<{ value: DatasetModality; label: string }> = [
+  { value: "bulk_rna", label: "Bulk" },
+  { value: "single_cell", label: "单细胞" },
+  { value: "spatial", label: "空间转录组" },
+  { value: "atac_seq", label: "ATAC" },
+  { value: "genomics", label: "基因组" },
+];
+
+function RelatedDatasets({ datasets }: { datasets: PublicDataset[] }) {
+  const [activeModality, setActiveModality] = useState<DatasetModality | "all">("all");
+  const visibleDatasets = activeModality === "all"
+    ? datasets
+    : datasets.filter((dataset) => dataset.modality === activeModality);
+
+  return (
+    <div className="desktop-datasets">
+      <div className="desktop-dataset-filters" aria-label="按数据类型筛选">
+        <button
+          type="button"
+          className={activeModality === "all" ? "active" : ""}
+          aria-pressed={activeModality === "all"}
+          onClick={() => setActiveModality("all")}
+        >
+          全部 <span>{datasets.length}</span>
+        </button>
+        {DATASET_MODALITIES.map((option) => {
+          const count = datasets.filter((dataset) => dataset.modality === option.value).length;
+          return (
+            <button
+              type="button"
+              className={activeModality === option.value ? "active" : ""}
+              aria-pressed={activeModality === option.value}
+              onClick={() => setActiveModality(option.value)}
+              key={option.value}
+            >
+              {option.label} <span>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {visibleDatasets.length ? (
+        <div className="desktop-dataset-list" aria-live="polite">
+          {visibleDatasets.map((dataset) => (
+            <article className="desktop-dataset-card" data-testid="desktop-dataset-card" key={dataset.id}>
+              <div className="desktop-dataset-icon" aria-hidden="true"><Database size={17} /></div>
+              <div className="desktop-dataset-body">
+                <div className="desktop-dataset-eyebrow">
+                  <span>{dataset.source}</span><strong>{dataset.accession}</strong>
+                </div>
+                <h3>{dataset.title}</h3>
+                {dataset.summary ? <p>{dataset.summary}</p> : null}
+                <div className="desktop-dataset-meta">
+                  <span>{DATASET_MODALITIES.find((item) => item.value === dataset.modality)?.label}</span>
+                  {dataset.organism ? <span>{dataset.organism}</span> : null}
+                  {dataset.sampleCount != null ? <span>{dataset.sampleCount} 个样本</span> : null}
+                  {dataset.dataTypes.map((dataType) => <span key={dataType}>{dataType}</span>)}
+                </div>
+              </div>
+              <a
+                className="desktop-dataset-link"
+                href={dataset.url}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`在 ${dataset.source} 查看 ${dataset.accession}`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void openUrl(dataset.url);
+                }}
+              >
+                查看数据 <ExternalLink size={14} aria-hidden="true" />
+              </a>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="desktop-dataset-empty" role="status">
+          <Database size={19} aria-hidden="true" />
+          <p>{datasets.length ? "当前类型暂无匹配数据集。" : "本次检索未发现可追溯的公共数据集。"}</p>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -5,8 +5,8 @@ use thiserror::Error;
 use crate::{
     cancellation::CancellationToken,
     contracts::{
-        EvidenceRecord, ExportFormat, ExportResult, MessageResult, Project, Report, ResearchBrief,
-        ResearchRun, RunEvent, RunSnapshot,
+        DatasetModality, EvidenceRecord, ExportFormat, ExportResult, MessageResult, Project,
+        Report, ResearchBrief, ResearchRun, RunEvent, RunSnapshot,
     },
     live_research::LiveResearchBackend,
     pipeline::{PipelineError, ResearchEngine},
@@ -268,14 +268,39 @@ fn report_markdown(report: &Report) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
+    let datasets = if report.related_datasets.is_empty() {
+        "- 本次检索未发现可追溯的公共数据集。".into()
+    } else {
+        report
+            .related_datasets
+            .iter()
+            .map(|dataset| {
+                let sample_count = dataset
+                    .sample_count
+                    .map(|count| format!(" · {count} 个样本"))
+                    .unwrap_or_default();
+                format!(
+                    "- [{} · {}]({}) — {} · {}{}",
+                    dataset.accession,
+                    dataset.title.replace(['\r', '\n'], " "),
+                    dataset.url,
+                    dataset.source,
+                    dataset_modality_label(dataset.modality),
+                    sample_count
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let references = markdown_reference_table(report);
     format!(
-        "# {}\n\n{}\n\n## 进展时间线\n\n{}\n\n## 主题版图\n\n{}\n\n## 主要结论\n\n{}\n\n## 争议与局限\n\n{}\n\n## 研究空白\n\n{}\n\n## 三个下一步方案\n\n{}\n\n## 参考文献\n\n{}\n\n---\n\n{}",
+        "# {}\n\n{}\n\n## 进展时间线\n\n{}\n\n## 主题版图\n\n{}\n\n## 主要结论\n\n{}\n\n## 相关公共数据集\n\n{}\n\n## 争议与局限\n\n{}\n\n## 研究空白\n\n{}\n\n## 三个下一步方案\n\n{}\n\n## 参考文献\n\n{}\n\n---\n\n{}",
         report.title,
         report.summary,
         timeline,
         themes,
         claims,
+        datasets,
         markdown_list(
             &report
                 .controversies
@@ -321,14 +346,34 @@ fn report_print_html(report: &Report) -> String {
             )
         })
         .collect::<String>();
+    let datasets = if report.related_datasets.is_empty() {
+        "<p>本次检索未发现可追溯的公共数据集。</p>".into()
+    } else {
+        report
+            .related_datasets
+            .iter()
+            .map(|dataset| {
+                format!(
+                    "<article><h3>{} · {}</h3><p>{} · {}</p><p>{}</p><a href=\"{}\">查看数据</a></article>",
+                    escape_html(&dataset.accession),
+                    escape_html(&dataset.title),
+                    escape_html(&dataset.source),
+                    dataset_modality_label(dataset.modality),
+                    escape_html(&dataset.summary),
+                    escape_html(&dataset.url),
+                )
+            })
+            .collect::<String>()
+    };
     format!(
-        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>{}</title><style>body{{max-width:920px;margin:40px auto;font:15px/1.7 system-ui;color:#26342d}}h1,h2{{line-height:1.25}}section{{margin:32px 0}}article{{break-inside:avoid;border:1px solid #d9e0dc;padding:16px;margin:12px 0}}dt{{font-weight:700}}dd{{margin:0 0 8px}}table{{width:100%;border-collapse:collapse;font-size:12px}}th,td{{padding:8px;border:1px solid #d9e0dc;text-align:left;vertical-align:top}}th{{background:#f2f5f3}}footer{{margin-top:40px;padding-top:20px;border-top:1px solid #d9e0dc;color:#68756e}}</style></head><body><h1>{}</h1><p>{}</p><section><h2>进展时间线</h2>{}</section><section><h2>主题版图</h2>{}</section><section><h2>主要结论</h2><ul>{}</ul></section><section><h2>争议与局限</h2>{}{}</section><section><h2>研究空白</h2>{}</section><section><h2>三个下一步方案</h2>{}</section><section><h2>参考文献</h2>{}</section><footer>{}</footer></body></html>",
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>{}</title><style>body{{max-width:920px;margin:40px auto;font:15px/1.7 system-ui;color:#26342d}}h1,h2{{line-height:1.25}}section{{margin:32px 0}}article{{break-inside:avoid;border:1px solid #d9e0dc;padding:16px;margin:12px 0}}dt{{font-weight:700}}dd{{margin:0 0 8px}}table{{width:100%;border-collapse:collapse;font-size:12px}}th,td{{padding:8px;border:1px solid #d9e0dc;text-align:left;vertical-align:top}}th{{background:#f2f5f3}}footer{{margin-top:40px;padding-top:20px;border-top:1px solid #d9e0dc;color:#68756e}}</style></head><body><h1>{}</h1><p>{}</p><section><h2>进展时间线</h2>{}</section><section><h2>主题版图</h2>{}</section><section><h2>主要结论</h2><ul>{}</ul></section><section><h2>相关公共数据集</h2>{}</section><section><h2>争议与局限</h2>{}{}</section><section><h2>研究空白</h2>{}</section><section><h2>三个下一步方案</h2>{}</section><section><h2>参考文献</h2>{}</section><footer>{}</footer></body></html>",
         escape_html(&report.title),
         escape_html(&report.title),
         escape_html(&report.summary),
         html_list(&report.timeline),
         html_list(&report.themes),
         claims,
+        datasets,
         html_list(&report.controversies),
         html_list(&report.limitations),
         html_list(&report.gaps),
@@ -336,6 +381,16 @@ fn report_print_html(report: &Report) -> String {
         html_reference_table(report),
         escape_html(&report.disclaimer)
     )
+}
+
+fn dataset_modality_label(modality: DatasetModality) -> &'static str {
+    match modality {
+        DatasetModality::BulkRna => "Bulk RNA",
+        DatasetModality::SingleCell => "单细胞",
+        DatasetModality::Spatial => "空间转录组",
+        DatasetModality::AtacSeq => "ATAC-seq",
+        DatasetModality::Genomics => "基因组",
+    }
 }
 
 fn markdown_reference_table(report: &Report) -> String {

@@ -4,6 +4,10 @@ from paperpilot.connectors.crossref import CrossrefConnector
 from paperpilot.connectors.europe_pmc import EuropePmcConnector
 from paperpilot.connectors.openalex import OpenAlexConnector
 from paperpilot.connectors.pubmed import PubMedConnector
+from paperpilot.connectors.public_datasets import (
+    EncodeDatasetConnector,
+    NcbiGeoDatasetConnector,
+)
 from paperpilot.domain.models import ResearchBrief
 
 
@@ -129,3 +133,73 @@ async def test_openalex_reconstructs_abstract_and_pmid() -> None:
 
     assert papers[0].abstract == "External validation succeeded"
     assert papers[0].pmid == "34567890"
+
+
+async def test_ncbi_geo_search_maps_and_classifies_public_datasets() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("esearch.fcgi"):
+            term = request.url.params["term"]
+            ids = ["200"] if "single cell RNA-seq" in term else []
+            return httpx.Response(200, json={"esearchresult": {"idlist": ids}})
+        return httpx.Response(
+            200,
+            json={
+                "result": {
+                    "uids": ["200"],
+                    "200": {
+                        "accession": "GSE12345",
+                        "title": "Single-cell atlas for biomarker validation",
+                        "summary": "A scRNA-seq cohort with annotated immune cells.",
+                        "taxon": "Homo sapiens",
+                        "n_samples": "24",
+                        "gdsType": "Expression profiling by high throughput sequencing",
+                    },
+                }
+            },
+        )
+
+    connector = NcbiGeoDatasetConnector(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        email="researcher@example.com",
+    )
+
+    datasets = await connector.search(
+        ResearchBrief(question="Which datasets support external biomarker validation?")
+    )
+
+    assert len(datasets) == 1
+    assert datasets[0].accession == "GSE12345"
+    assert datasets[0].modality.value == "single_cell"
+    assert datasets[0].sample_count == 24
+    assert str(datasets[0].url).endswith("GSE12345")
+
+
+async def test_encode_search_returns_released_atac_experiments() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params["assay_title"] != "ATAC-seq":
+            return httpx.Response(200, json={"@graph": []})
+        return httpx.Response(
+            200,
+            json={
+                "@graph": [
+                    {
+                        "accession": "ENCSR123ABC",
+                        "biosample_summary": "human retinal cells",
+                        "description": ["Released chromatin accessibility experiment."],
+                        "replicates": ["/replicates/1/", "/replicates/2/"],
+                    }
+                ]
+            },
+        )
+
+    connector = EncodeDatasetConnector(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    datasets = await connector.search(
+        ResearchBrief(question="Which datasets support retinal biomarker validation?")
+    )
+
+    assert len(datasets) == 1
+    assert datasets[0].accession == "ENCSR123ABC"
+    assert datasets[0].modality.value == "atac_seq"
+    assert datasets[0].sample_count == 2

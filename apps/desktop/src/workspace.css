@@ -198,6 +198,24 @@ button { cursor: pointer; }
 .inline-evidence-link:hover, .paper-id-link:hover, .metric-link:hover { color: #084d8a; text-decoration: underline; }
 .inline-evidence-link:focus-visible, .paper-id-link:focus-visible, .metric-link:focus-visible { outline: 2px solid #2584cf; outline-offset: 2px; }
 .report-section ul { padding-left: 20px; line-height: 1.7; }
+.desktop-dataset-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.desktop-dataset-filters button { min-height: 30px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; color: #58665f; background: #fff; border: 1px solid #d5ddd8; border-radius: 4px; font-size: 10px; cursor: pointer; }
+.desktop-dataset-filters button:hover,.desktop-dataset-filters button:focus-visible { border-color: #8eaa9a; }
+.desktop-dataset-filters button.active { color: #176b52; background: #e8f2ed; border-color: #abc7b8; font-weight: 800; }
+.desktop-dataset-filters button span { min-width: 16px; padding: 1px 4px; background: rgba(255,255,255,.75); border-radius: 8px; font-size: 9px; text-align: center; }
+.desktop-dataset-list { display: grid; gap: 8px; }
+.desktop-dataset-card { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: start; gap: 12px; padding: 14px 15px; background: #fff; border: 1px solid #d9e0dc; border-radius: 6px; }
+.desktop-dataset-icon { width: 32px; height: 32px; display: grid; place-items: center; color: #176b52; background: #e3f0e9; border-radius: 5px; }
+.desktop-dataset-eyebrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 9px; color: #176b52; font-size: 9px; font-weight: 800; text-transform: uppercase; }
+.desktop-dataset-eyebrow strong { color: #6b7770; font-family: ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing: .02em; }
+.desktop-dataset-body h3 { margin: 5px 0 4px; font-size: 14px; line-height: 1.4; }
+.desktop-dataset-body > p { max-width: 760px; margin: 0; color: #647169; font-size: 11px; line-height: 1.55; }
+.desktop-dataset-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.desktop-dataset-meta span { padding: 3px 5px; color: #5f6d65; background: #f1f4f2; border-radius: 3px; font-size: 9px; }
+.desktop-dataset-link { min-height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 6px; color: #176b52; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.desktop-dataset-link:hover { text-decoration: underline; }
+.desktop-dataset-empty { min-height: 82px; display: grid; place-items: center; align-content: center; gap: 7px; color: #748078; background: #f8faf8; border: 1px dashed #d5ddd8; }
+.desktop-dataset-empty p { margin: 0; font-size: 11px; }
 .recommendation-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
 .recommendation-card { position: relative; min-height: 390px; display: flex; flex-direction: column; padding: 17px; border: 1px solid #d9e0dc; border-radius: 7px; background: #fff; }
 .recommendation-card > span { position: absolute; top: 14px; right: 14px; color: #bdc8c1; font-size: 18px; font-weight: 800; }.recommendation-card > svg { color: #176b52; }
@@ -219,6 +237,8 @@ button { cursor: pointer; }
 .evidence-entity-list { display: flex; flex-wrap: wrap; gap: 5px; }.evidence-entity-list span { padding: 2px 6px; color: #8b4162; background: #f6eaf0; border-radius: 9px; font-size: 10px; font-weight: 750; }
 @media (max-width: 1250px) { .recommendation-grid { grid-template-columns: 1fr; }.recommendation-card { min-height: 0; } }
 @media (max-width: 760px) {
+  .desktop-dataset-card { grid-template-columns: 32px minmax(0,1fr); }
+  .desktop-dataset-link { grid-column: 2; justify-self: start; padding-inline: 0; }
   .knowledge-graph svg { min-height: 600px; }
   .knowledge-graph-legend { position: static; max-width: none; justify-content: flex-start; margin: 7px; }
   .knowledge-graph-detail { grid-template-columns: minmax(0,1fr); }

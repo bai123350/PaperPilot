@@ -72,6 +72,7 @@ fn report_requires_exactly_three_recommendations_and_known_evidence() {
         timeline: vec![],
         themes: vec![],
         claims: vec![],
+        related_datasets: vec![],
         controversies: vec![],
         limitations: vec![],
         gaps: vec![],

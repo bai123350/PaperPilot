@@ -5,9 +5,9 @@ use uuid::Uuid;
 use crate::{
     CONTRACT_VERSION,
     contracts::{
-        Claim, ConversationMessage, EvidenceRecord, MessageAction, MessageResult, Project,
-        Recommendation, Report, ResearchBrief, ResearchRun, RunEvent, RunOperation, RunSnapshot,
-        RunStatus, validate_report,
+        Claim, ConversationMessage, DatasetModality, EvidenceRecord, MessageAction, MessageResult,
+        Project, PublicDataset, Recommendation, Report, ResearchBrief, ResearchRun, RunEvent,
+        RunOperation, RunSnapshot, RunStatus, validate_report,
     },
     live_research::{LiveResearchBackend, LiveResearchError, LiveResearchTrace},
     storage::{LocalStore, StorageError},
@@ -634,12 +634,14 @@ impl ResearchEngine {
             "running",
             &mut on_event,
         )?;
+        let related_datasets = backend.search_public_datasets(&brief);
         let report_result = backend.synthesize_report(run_id, 1, &brief, &evidence, None);
         let current = self.store.get_run(run_id)?;
         if current.status != RunStatus::Running {
             return Ok(current);
         }
-        let report = report_result?;
+        let mut report = report_result?;
+        report.related_datasets = related_datasets;
         self.record_live_stage(
             run_id,
             6,
@@ -885,13 +887,14 @@ impl ResearchEngine {
             }
             MessageAction::ReviseReport => {
                 let version = run.report_version + 1;
-                let revised = backend.synthesize_report(
+                let mut revised = backend.synthesize_report(
                     run_id,
                     version,
                     &brief,
                     &current_report.evidence,
                     Some(content),
                 )?;
+                revised.related_datasets = current_report.related_datasets.clone();
                 validate_report(&revised).map_err(PipelineError::Validation)?;
                 self.store.save_report(&revised)?;
                 self.store.update_run(
@@ -1139,6 +1142,7 @@ fn demo_report(run_id: &str, version: u32, evidence: Vec<EvidenceRecord>) -> Rep
                 evidence_ids: vec![evidence_ids[1].clone()],
             },
         ],
+        related_datasets: demo_datasets(),
         controversies: vec!["不同检测平台对标志物阈值尚无共识。".into()],
         limitations: vec!["现有证据以回顾性队列为主。".into()],
         gaps: vec!["缺少跨实验室、跨队列的前瞻验证。".into()],
@@ -1152,4 +1156,74 @@ fn demo_report(run_id: &str, version: u32, evidence: Vec<EvidenceRecord>) -> Rep
         disclaimer: "本报告仅供科研用途，不构成临床诊断或治疗建议。".into(),
         created_at: Utc::now(),
     }
+}
+
+fn demo_datasets() -> Vec<PublicDataset> {
+    vec![
+        PublicDataset {
+            id: "dataset-demo-bulk".into(),
+            accession: "DEMO-GEO-BULK-001".into(),
+            title: "独立队列的 bulk RNA-seq 表达谱".into(),
+            source: "NCBI GEO（演示）".into(),
+            modality: DatasetModality::BulkRna,
+            organism: Some("Homo sapiens".into()),
+            sample_count: Some(96),
+            summary: "病例与对照的 bulk RNA-seq 队列，可用于候选信号的表达复现。".into(),
+            data_types: vec!["RNA-seq".into(), "processed counts".into()],
+            access: "open".into(),
+            url: "https://www.ncbi.nlm.nih.gov/geo/".into(),
+        },
+        PublicDataset {
+            id: "dataset-demo-single-cell".into(),
+            accession: "DEMO-CELLXGENE-SC-001".into(),
+            title: "目标组织的单细胞转录组图谱".into(),
+            source: "CELLxGENE（演示）".into(),
+            modality: DatasetModality::SingleCell,
+            organism: Some("Homo sapiens".into()),
+            sample_count: Some(18),
+            summary: "包含主要细胞类型注释的 scRNA-seq 数据，可定位候选信号的细胞来源。".into(),
+            data_types: vec!["scRNA-seq".into(), "h5ad".into()],
+            access: "open".into(),
+            url: "https://cellxgene.cziscience.com/datasets".into(),
+        },
+        PublicDataset {
+            id: "dataset-demo-spatial".into(),
+            accession: "DEMO-GEO-SPATIAL-001".into(),
+            title: "疾病组织的空间转录组数据".into(),
+            source: "NCBI GEO（演示）".into(),
+            modality: DatasetModality::Spatial,
+            organism: Some("Homo sapiens".into()),
+            sample_count: Some(12),
+            summary: "空间表达矩阵与组织切片，可用于验证候选通路的组织区域定位。".into(),
+            data_types: vec!["spatial transcriptomics".into(), "tissue images".into()],
+            access: "open".into(),
+            url: "https://www.ncbi.nlm.nih.gov/geo/".into(),
+        },
+        PublicDataset {
+            id: "dataset-demo-atac".into(),
+            accession: "DEMO-ENCODE-ATAC-001".into(),
+            title: "相关细胞类型的开放染色质图谱".into(),
+            source: "ENCODE（演示）".into(),
+            modality: DatasetModality::AtacSeq,
+            organism: Some("Homo sapiens".into()),
+            sample_count: Some(8),
+            summary: "标准化 ATAC-seq 峰与信号轨迹，可评估候选调控区域的可及性。".into(),
+            data_types: vec!["ATAC-seq".into(), "bigWig".into(), "peaks".into()],
+            access: "open".into(),
+            url: "https://www.encodeproject.org/".into(),
+        },
+        PublicDataset {
+            id: "dataset-demo-genomics".into(),
+            accession: "DEMO-GDC-GENOME-001".into(),
+            title: "开放访问的队列基因组变异数据".into(),
+            source: "NCI GDC（演示）".into(),
+            modality: DatasetModality::Genomics,
+            organism: Some("Homo sapiens".into()),
+            sample_count: Some(240),
+            summary: "包含开放层级的体细胞变异与拷贝数数据，可用于候选基因的基因组验证。".into(),
+            data_types: vec!["somatic variants".into(), "copy number".into()],
+            access: "open".into(),
+            url: "https://portal.gdc.cancer.gov/".into(),
+        },
+    ]
 }

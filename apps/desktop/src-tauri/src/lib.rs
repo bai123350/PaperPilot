@@ -11,6 +11,7 @@ pub mod live_research;
 pub mod pdf_parser;
 pub mod pipeline;
 pub mod provider_settings;
+pub mod public_datasets;
 pub mod runtime;
 pub mod storage;
 mod tauri_api;

@@ -31,14 +31,9 @@ fn desktop_service_exposes_the_local_project_run_report_and_delete_flow() {
         service.get_run_snapshot(&run.id).unwrap().operations.len(),
         9
     );
-    assert_eq!(
-        service
-            .get_report(&run.id, None)
-            .unwrap()
-            .recommendations
-            .len(),
-        3
-    );
+    let report = service.get_report(&run.id, None).unwrap();
+    assert_eq!(report.recommendations.len(), 3);
+    assert_eq!(report.related_datasets.len(), 5);
 
     let export = service
         .export_report(&run.id, ExportFormat::Markdown)
@@ -46,6 +41,7 @@ fn desktop_service_exposes_the_local_project_run_report_and_delete_flow() {
     assert!(export.content.contains("## 进展时间线"));
     assert!(export.content.contains("## 主题版图"));
     assert!(export.content.contains("## 三个下一步方案"));
+    assert!(export.content.contains("## 相关公共数据集"));
     assert!(export.content.contains("## 参考文献"));
     assert!(
         export
@@ -59,6 +55,7 @@ fn desktop_service_exposes_the_local_project_run_report_and_delete_flow() {
         .unwrap();
     assert!(print_export.content.contains("<h2>主要结论</h2>"));
     assert!(print_export.content.contains("<h2>三个下一步方案</h2>"));
+    assert!(print_export.content.contains("<h2>相关公共数据集</h2>"));
     assert!(print_export.content.contains("<h2>参考文献</h2>"));
     assert!(print_export.content.contains("<th>影响因子</th>"));
 

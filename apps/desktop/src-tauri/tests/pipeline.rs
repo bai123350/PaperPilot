@@ -2,8 +2,8 @@ use chrono::Utc;
 use paperpilot_desktop::{
     CONTRACT_VERSION,
     contracts::{
-        Claim, ConversationMessage, EvidenceRecord, MessageAction, Recommendation, Report,
-        ResearchBrief, RunStatus, validate_report,
+        Claim, ConversationMessage, DatasetModality, EvidenceRecord, MessageAction, PublicDataset,
+        Recommendation, Report, ResearchBrief, RunStatus, validate_report,
     },
     live_research::{
         GroundedReply, LiveResearchBackend, LiveResearchError, LiveResearchTrace, RankedSource,
@@ -247,6 +247,22 @@ impl LiveResearchBackend for FakeLiveBackend {
         }])
     }
 
+    fn search_public_datasets(&self, _brief: &ResearchBrief) -> Vec<PublicDataset> {
+        vec![PublicDataset {
+            id: "dataset-live-1".into(),
+            accession: "GSE12345".into(),
+            title: "Live single-cell dataset".into(),
+            source: "NCBI GEO".into(),
+            modality: DatasetModality::SingleCell,
+            organism: Some("Homo sapiens".into()),
+            sample_count: Some(24),
+            summary: "Public validation cohort".into(),
+            data_types: vec!["scRNA-seq".into()],
+            access: "open".into(),
+            url: "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE12345".into(),
+        }]
+    }
+
     fn collect_evidence_with_trace(
         &self,
         run_id: &str,
@@ -355,7 +371,7 @@ impl LiveResearchBackend for FakeLiveBackend {
         let evidence_id = evidence[0].id.clone();
         Ok(Report {
             contract_version: CONTRACT_VERSION.into(),
-            schema_version: "1.0".into(),
+            schema_version: "1.1".into(),
             run_id: run_id.into(),
             version,
             title: format!("模型报告：{}", brief.question),
@@ -369,6 +385,7 @@ impl LiveResearchBackend for FakeLiveBackend {
                 statement: "模型生成且有证据引用的结论。".into(),
                 evidence_ids: vec![evidence_id.clone()],
             }],
+            related_datasets: vec![],
             controversies: vec!["模型识别的争议".into()],
             limitations: vec!["仅基于已检索摘要".into()],
             gaps: vec!["模型识别的研究空白".into()],
@@ -425,6 +442,7 @@ fn live_pipeline_uses_the_configured_backend_for_report_and_follow_up() {
     let report = engine.get_report(&run.id, None).unwrap();
     assert!(report.title.starts_with("模型报告："));
     assert_eq!(report.evidence[0].paper_id, "pmid:live-1");
+    assert_eq!(report.related_datasets[0].accession, "GSE12345");
     assert!(!report.summary.contains("三条主要耐药路径"));
     let snapshot = engine.get_run_snapshot(&run.id).unwrap();
     assert_eq!(snapshot.operations.len(), 9);
@@ -510,6 +528,14 @@ fn live_pipeline_uses_the_configured_backend_for_report_and_follow_up() {
             .message
             .content
             .contains(&engine.get_report(&run.id, Some(2)).unwrap().summary)
+    );
+    assert_eq!(
+        engine
+            .get_report(&run.id, Some(2))
+            .unwrap()
+            .related_datasets[0]
+            .accession,
+        "GSE12345"
     );
     let histories = backend.received_histories.lock().unwrap();
     assert_eq!(histories.len(), 1);

@@ -5,7 +5,7 @@ import { mapReport } from "./report-mapper";
 describe("mapReport", () => {
   it("joins evidence to paper titles and maps recommendation fields", () => {
     const report = mapReport({
-      schema_version: "1.0",
+      schema_version: "1.1",
       title: "Biomarker landscape",
       summary: "Evidence summary",
       themes: ["外部验证"],
@@ -19,6 +19,21 @@ describe("mapReport", () => {
           evidence_type: "study_finding",
           confidence: 0.8,
           pmid: "123",
+        },
+      ],
+      related_datasets: [
+        {
+          id: "dataset-1",
+          accession: "GSE12345",
+          title: "Single-cell validation atlas",
+          source: "NCBI GEO",
+          modality: "single_cell",
+          organism: "Homo sapiens",
+          sample_count: 24,
+          summary: "Public single-cell cohort.",
+          data_types: ["scRNA-seq"],
+          access: "open",
+          url: "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE12345",
         },
       ],
       recommendations: [
@@ -39,8 +54,9 @@ describe("mapReport", () => {
       gaps: ["No external cohort"],
     });
 
-    expect(report.schemaVersion).toBe("1.0");
+    expect(report.schemaVersion).toBe("1.1");
     expect(report.evidence[0].paperTitle).toBe("Prospective validation study");
     expect(report.recommendations[0].minimalValidation).toBe("Use an independent cohort.");
+    expect(report.relatedDatasets?.[0].sampleCount).toBe(24);
   });
 });

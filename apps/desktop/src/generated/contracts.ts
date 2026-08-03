@@ -31,4 +31,8 @@ export type Claim = { id: string, statement: string, evidenceIds: Array<string>,
 
 export type Recommendation = { id: string, title: string, rationale: string, hypothesis: string, minimalValidation: string, resources: Array<string>, risks: Array<string>, stopCondition: string, evidenceIds: Array<string>, };
 
-export type Report = { contractVersion: string, schemaVersion: string, runId: string, version: number, title: string, summary: string, timeline: Array<string>, themes: Array<string>, claims: Array<Claim>, controversies: Array<string>, limitations: Array<string>, gaps: Array<string>, recommendations: Array<Recommendation>, evidence: Array<EvidenceRecord>, references: Array<string>, disclaimer: string, createdAt: string, };
+export type DatasetModality = "bulk_rna" | "single_cell" | "spatial" | "atac_seq" | "genomics";
+
+export type PublicDataset = { id: string, accession: string, title: string, source: string, modality: DatasetModality, organism: string | null, sampleCount: number | null, summary: string, dataTypes: Array<string>, access: string, url: string, };
+
+export type Report = { contractVersion: string, schemaVersion: string, runId: string, version: number, title: string, summary: string, timeline: Array<string>, themes: Array<string>, claims: Array<Claim>, relatedDatasets: Array<PublicDataset>, controversies: Array<string>, limitations: Array<string>, gaps: Array<string>, recommendations: Array<Recommendation>, evidence: Array<EvidenceRecord>, references: Array<string>, disclaimer: string, createdAt: string, };

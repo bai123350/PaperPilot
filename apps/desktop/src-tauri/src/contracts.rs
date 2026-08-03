@@ -207,6 +207,34 @@ pub struct Recommendation {
     pub evidence_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum DatasetModality {
+    BulkRna,
+    SingleCell,
+    Spatial,
+    AtacSeq,
+    Genomics,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PublicDataset {
+    pub id: String,
+    pub accession: String,
+    pub title: String,
+    pub source: String,
+    pub modality: DatasetModality,
+    pub organism: Option<String>,
+    pub sample_count: Option<u32>,
+    pub summary: String,
+    pub data_types: Vec<String>,
+    pub access: String,
+    pub url: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -220,6 +248,8 @@ pub struct Report {
     pub timeline: Vec<String>,
     pub themes: Vec<String>,
     pub claims: Vec<Claim>,
+    #[serde(default)]
+    pub related_datasets: Vec<PublicDataset>,
     pub controversies: Vec<String>,
     pub limitations: Vec<String>,
     pub gaps: Vec<String>,

@@ -1,6 +1,12 @@
 import httpx
 
-from paperpilot.domain.models import Paper, ResearchBrief, RunStage
+from paperpilot.domain.models import (
+    DatasetModality,
+    Paper,
+    PublicDataset,
+    ResearchBrief,
+    RunStage,
+)
 from paperpilot.domain.operations import OperationUpdate
 from paperpilot.services.pipeline import ResearchPipeline
 
@@ -20,6 +26,26 @@ class StubConnector:
                 year=2024,
                 pmid="12345678",
                 source=self.name,
+            )
+        ]
+
+
+class StubDatasetConnector:
+    name = "stub_datasets"
+
+    async def search(self, brief: ResearchBrief) -> list[PublicDataset]:
+        return [
+            PublicDataset(
+                id="dataset-1",
+                accession="GSE12345",
+                title="Single-cell validation atlas",
+                source="NCBI GEO",
+                modality=DatasetModality.SINGLE_CELL,
+                organism="Homo sapiens",
+                sample_count=24,
+                summary="A public single-cell cohort for independent validation.",
+                data_types=["scRNA-seq"],
+                url="https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE12345",
             )
         ]
 
@@ -84,7 +110,10 @@ class OperationCollector:
 async def test_pipeline_emits_ordered_stages_and_builds_an_auditable_report() -> None:
     stages: list[RunStage] = []
     operations = OperationCollector()
-    pipeline = ResearchPipeline(connectors=[StubConnector()])
+    pipeline = ResearchPipeline(
+        connectors=[StubConnector()],
+        dataset_connectors=[StubDatasetConnector()],
+    )
 
     report = await pipeline.run(
         ResearchBrief(question="What is the evidence for circulating biomarkers in treatment response?"),
@@ -93,14 +122,16 @@ async def test_pipeline_emits_ordered_stages_and_builds_an_auditable_report() ->
     )
 
     assert stages == list(RunStage)
-    assert report.schema_version == "1.0"
+    assert report.schema_version == "1.1"
     assert report.claims
     assert all(claim.evidence_ids for claim in report.claims)
     assert len(report.recommendations) == 3
     assert all(item.evidence_ids and item.stop_condition for item in report.recommendations)
+    assert report.related_datasets[0].accession == "GSE12345"
     assert [update.operation_kind.value for update, _ in operations.completed] == [
         "structure_question",
         "search_source",
+        "search_dataset_source",
         "deduplicate",
         "screen",
         "parse",
@@ -113,6 +144,7 @@ async def test_pipeline_emits_ordered_stages_and_builds_an_auditable_report() ->
         update.operation_kind.value: metrics for update, metrics in operations.completed
     }
     assert completed_metrics["search_source"]["candidate_count"] == 1
+    assert completed_metrics["search_dataset_source"]["dataset_count"] == 1
     assert completed_metrics["create_evidence"]["evidence_count"] == 1
     assert completed_metrics["recommend"]["recommendation_count"] == 3
 

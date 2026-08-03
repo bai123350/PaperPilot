@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Annotated
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 def utc_now() -> datetime:
@@ -120,6 +120,28 @@ class Recommendation(BaseModel):
     evidence_ids: Annotated[list[str], Field(min_length=1)]
 
 
+class DatasetModality(str, Enum):
+    BULK_RNA = "bulk_rna"
+    SINGLE_CELL = "single_cell"
+    SPATIAL = "spatial"
+    ATAC_SEQ = "atac_seq"
+    GENOMICS = "genomics"
+
+
+class PublicDataset(BaseModel):
+    id: str = Field(default_factory=lambda: f"dataset-{uuid4().hex[:12]}")
+    accession: Annotated[str, Field(min_length=2, max_length=200)]
+    title: Annotated[str, Field(min_length=3, max_length=1000)]
+    source: Annotated[str, Field(min_length=2, max_length=100)]
+    modality: DatasetModality
+    organism: str | None = None
+    sample_count: int | None = Field(default=None, ge=0)
+    summary: str = Field(default="", max_length=3000)
+    data_types: list[str] = Field(default_factory=list)
+    access: str = "open"
+    url: HttpUrl
+
+
 class TimelineItem(BaseModel):
     year: int
     title: str
@@ -128,13 +150,14 @@ class TimelineItem(BaseModel):
 
 
 class Report(BaseModel):
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     title: str
     summary: str
     themes: list[str] = Field(default_factory=list)
     timeline: list[TimelineItem] = Field(default_factory=list)
     claims: list[Claim]
     evidence: list[EvidenceRecord]
+    related_datasets: list[PublicDataset] = Field(default_factory=list)
     controversies: list[str] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
     recommendations: Annotated[list[Recommendation], Field(min_length=3, max_length=3)]

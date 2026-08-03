@@ -17,6 +17,11 @@ test("creates an evidence report and opens its source record", async ({ page }, 
   await expect(page.getByRole("article", { name: /研究操作：/ }).first()).toBeVisible();
   await expect(page.getByText(/Evidence-first report/)).toBeVisible();
   await expect(page.getByTestId("recommendation-card")).toHaveCount(3);
+  await expect(page.getByTestId("dataset-card")).toHaveCount(5);
+  await page.getByRole("button", { name: "ATAC 1" }).click();
+  await expect(page.getByTestId("dataset-card")).toHaveCount(1);
+  await page.getByRole("button", { name: "全部 5" }).click();
+  await expect(page.getByTestId("dataset-card")).toHaveCount(5);
   await page.getByRole("button", { name: "查看证据" }).click();
   await expect(page.getByRole("complementary", { name: "证据详情" })).toBeVisible();
   await expect(page.getByText("PMID", { exact: true })).toBeVisible();

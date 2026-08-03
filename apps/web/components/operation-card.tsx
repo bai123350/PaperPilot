@@ -2,6 +2,7 @@ import {
   BookOpenCheck,
   Check,
   CircleAlert,
+  Database,
   FileCheck2,
   FileSearch,
   FlaskConical,
@@ -20,6 +21,7 @@ interface OperationCardProps {
 }
 const operationIcons: Partial<Record<RunOperationKind, typeof ScanSearch>> = {
   search_source: ScanSearch,
+  search_dataset_source: Database,
   screen: FileSearch,
   parse: BookOpenCheck,
   create_evidence: FlaskConical,
@@ -44,6 +46,8 @@ const statusLabels = {
 const metricLabels: Record<string, (value: number) => string> = {
   source_count: (value) => `${value} 个文献来源`,
   candidate_count: (value) => `${value} 篇候选文献`,
+  dataset_count: (value) => `${value} 个相关数据集`,
+  dataset_source_count: (value) => `${value} 个数据来源`,
   retained_count: (value) => `${value} 篇保留文献`,
   parsed_count: (value) => `${value} 篇已解析`,
   evidence_count: (value) => `${value} 条证据`,

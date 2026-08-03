@@ -53,6 +53,7 @@ export type RunOperationTaskKind = "research_run" | "discussion" | "report_revis
 export type RunOperationKind =
   | "structure_question"
   | "search_source"
+  | "search_dataset_source"
   | "deduplicate"
   | "screen"
   | "parse"

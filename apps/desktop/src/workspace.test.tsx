@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 const report: Report = {
   contractVersion: "1.0",
-  schemaVersion: "1.0",
+  schemaVersion: "1.1",
   runId: "run-1",
   version: 1,
   title: "PD-1 耐药标志物：证据图谱与下一步",
@@ -23,6 +23,34 @@ const report: Report = {
       id: "claim-1",
       statement: "抗原呈递缺陷与原发耐药稳定相关。",
       evidenceIds: ["evidence-1"],
+    },
+  ],
+  relatedDatasets: [
+    {
+      id: "dataset-single-cell",
+      accession: "GSE12345",
+      title: "Single-cell validation atlas",
+      source: "NCBI GEO",
+      modality: "single_cell",
+      organism: "Homo sapiens",
+      sampleCount: 24,
+      summary: "可用于候选信号细胞来源验证的公开单细胞队列。",
+      dataTypes: ["scRNA-seq"],
+      access: "open",
+      url: "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE12345",
+    },
+    {
+      id: "dataset-atac",
+      accession: "ENCSR123ABC",
+      title: "Chromatin accessibility atlas",
+      source: "ENCODE",
+      modality: "atac_seq",
+      organism: "Homo sapiens",
+      sampleCount: 8,
+      summary: "标准化的开放染色质数据。",
+      dataTypes: ["ATAC-seq", "bigWig"],
+      access: "open",
+      url: "https://www.encodeproject.org/experiments/ENCSR123ABC/",
     },
   ],
   controversies: [],
@@ -369,6 +397,7 @@ describe("desktop workspace", () => {
 
   it("shows the complete report, exactly three plans, and traceable evidence", () => {
     const onExport = vi.fn();
+    vi.mocked(openUrl).mockClear();
     const { container } = render(
       <Workspace
         projectName="免疫耐药"
@@ -407,6 +436,14 @@ describe("desktop workspace", () => {
     );
 
     expect(screen.getByRole("heading", { name: report.title })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "相关公共数据集" })).toBeInTheDocument();
+    expect(screen.getAllByTestId("desktop-dataset-card")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "ATAC 1" }));
+    expect(screen.getAllByTestId("desktop-dataset-card")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("link", { name: "在 ENCODE 查看 ENCSR123ABC" }));
+    expect(openUrl).toHaveBeenCalledWith(
+      "https://www.encodeproject.org/experiments/ENCSR123ABC/",
+    );
     expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "研究知识图谱" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: /研究知识图谱/ })).toBeInTheDocument();
