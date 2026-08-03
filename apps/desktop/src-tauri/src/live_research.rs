@@ -1366,8 +1366,7 @@ struct OpenAlexLocation {
 struct OpenAlexSource {
     display_name: Option<String>,
     issn_l: Option<String>,
-    #[serde(default)]
-    issn: Vec<String>,
+    issn: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1502,7 +1501,9 @@ impl SourcePaper {
             .map(|source| {
                 (
                     source.display_name,
-                    source.issn_l.or_else(|| source.issn.into_iter().next()),
+                    source
+                        .issn_l
+                        .or_else(|| source.issn.into_iter().flatten().next()),
                 )
             })
             .unwrap_or_default();
@@ -2617,6 +2618,40 @@ mod tests {
         assert_eq!(OPENALEX_PAGE_SIZE, 200);
         assert_eq!(CROSSREF_PAGE_SIZE, 500);
         assert_eq!(CROSSREF_MAX_SEARCH_RESULTS, 1_000);
+    }
+
+    #[test]
+    fn accepts_openalex_sources_with_null_issn_lists() {
+        let response: OpenAlexResponse = serde_json::from_value(json!({
+            "meta": {"count": 1, "next_cursor": null},
+            "results": [{
+                "id": "https://openalex.org/W123",
+                "doi": null,
+                "title": "Relevant disease dataset study",
+                "publication_year": 2025,
+                "ids": {"pmid": "https://pubmed.ncbi.nlm.nih.gov/12345678"},
+                "primary_location": {
+                    "source": {
+                        "display_name": "Repository journal",
+                        "issn_l": null,
+                        "issn": null
+                    }
+                },
+                "abstract_inverted_index": {
+                    "Relevant": [0],
+                    "disease": [1],
+                    "evidence": [2]
+                }
+            }]
+        }))
+        .expect("OpenAlex permits a null ISSN list");
+
+        let paper =
+            SourcePaper::from_openalex(response.results.into_iter().next().expect("one work"))
+                .expect("work remains usable without ISSNs");
+        assert_eq!(paper.paper_id, "pmid:12345678");
+        assert_eq!(paper.journal.as_deref(), Some("Repository journal"));
+        assert_eq!(paper.issn, None);
     }
 
     #[test]

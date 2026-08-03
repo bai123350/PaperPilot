@@ -9,6 +9,102 @@ const NCBI_DELAY: Duration = Duration::from_millis(350);
 const NCBI_LIMIT_PER_MODALITY: &str = "3";
 const ENCODE_LIMIT_PER_ASSAY: &str = "2";
 
+const RELEVANCE_STOPWORDS: &[&str] = &[
+    "about",
+    "adult",
+    "adults",
+    "among",
+    "analysis",
+    "and",
+    "are",
+    "associated",
+    "association",
+    "available",
+    "between",
+    "biomedical",
+    "biomarker",
+    "biomarkers",
+    "based",
+    "can",
+    "case",
+    "cases",
+    "cell",
+    "cells",
+    "child",
+    "children",
+    "cohort",
+    "data",
+    "dataset",
+    "datasets",
+    "does",
+    "drive",
+    "drives",
+    "driving",
+    "evidence",
+    "effect",
+    "effects",
+    "elderly",
+    "evaluate",
+    "exists",
+    "external",
+    "find",
+    "following",
+    "for",
+    "from",
+    "have",
+    "how",
+    "homo",
+    "human",
+    "humans",
+    "impact",
+    "investigate",
+    "investigating",
+    "into",
+    "identify",
+    "male",
+    "men",
+    "mechanism",
+    "mechanisms",
+    "patient",
+    "patients",
+    "paediatric",
+    "pediatric",
+    "people",
+    "public",
+    "receiving",
+    "related",
+    "relationship",
+    "research",
+    "response",
+    "role",
+    "sample",
+    "samples",
+    "sapiens",
+    "study",
+    "studies",
+    "subject",
+    "subjects",
+    "support",
+    "supports",
+    "systemic",
+    "the",
+    "therapy",
+    "treatment",
+    "tissue",
+    "tissues",
+    "undergoing",
+    "use",
+    "used",
+    "using",
+    "validation",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "women",
+];
+
 const GEO_QUERIES: [(DatasetModality, &str); 5] = [
     (
         DatasetModality::BulkRna,
@@ -104,8 +200,10 @@ fn search_ncbi_geo(agent: &Agent, brief: &ResearchBrief) -> Vec<PublicDataset> {
             .into_iter()
             .flatten()
             .filter_map(Value::as_str);
-        datasets
-            .extend(uids.filter_map(|uid| parse_geo_dataset(result.get(uid)?, fallback_modality)));
+        datasets.extend(
+            uids.filter_map(|uid| parse_geo_dataset(result.get(uid)?, fallback_modality))
+                .filter(|dataset| dataset_matches_research_context(dataset, brief)),
+        );
     }
     datasets
 }
@@ -149,7 +247,11 @@ fn search_encode(agent: &Agent, brief: &ResearchBrief) -> Vec<PublicDataset> {
             .and_then(Value::as_array)
             .into_iter()
             .flatten();
-        datasets.extend(records.filter_map(|record| parse_encode_dataset(record, modality, assay)));
+        datasets.extend(
+            records
+                .filter_map(|record| parse_encode_dataset(record, modality, assay))
+                .filter(|dataset| dataset_matches_research_context(dataset, brief)),
+        );
     }
     datasets
 }
@@ -265,6 +367,82 @@ fn infer_modality(text: &str, fallback: DatasetModality) -> DatasetModality {
     }
 }
 
+fn dataset_matches_research_context(dataset: &PublicDataset, brief: &ResearchBrief) -> bool {
+    let required_terms = research_context_terms(brief);
+    if required_terms.is_empty() {
+        return false;
+    }
+
+    let searchable = format!(
+        "{} {} {} {}",
+        dataset.title,
+        dataset.summary,
+        dataset.organism.as_deref().unwrap_or_default(),
+        dataset.data_types.join(" ")
+    );
+    let dataset_terms = normalized_terms(&searchable)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    required_terms
+        .iter()
+        .all(|term| dataset_terms.contains(term))
+}
+
+fn research_context_terms(brief: &ResearchBrief) -> Vec<String> {
+    if let Some(population) = brief
+        .population
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let terms = normalized_terms(population);
+        if !terms.is_empty() {
+            return terms;
+        }
+    }
+
+    let keyword_terms = brief
+        .keywords
+        .iter()
+        .flat_map(|keyword| normalized_terms(keyword))
+        .collect::<Vec<_>>();
+    if !keyword_terms.is_empty() {
+        return deduplicate_terms(keyword_terms);
+    }
+
+    normalized_terms(&brief.question)
+}
+
+fn normalized_terms(value: &str) -> Vec<String> {
+    let normalized = value
+        .chars()
+        .map(|character| {
+            // GEO and ENCODE metadata are English; retaining a whole CJK phrase here
+            // would make an otherwise useful English keyword fallback impossible.
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>();
+    deduplicate_terms(
+        normalized
+            .split_whitespace()
+            .filter(|term| term.chars().count() >= 3)
+            .filter(|term| !RELEVANCE_STOPWORDS.contains(term))
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+fn deduplicate_terms(terms: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    terms
+        .into_iter()
+        .filter(|term| seen.insert(term.clone()))
+        .collect()
+}
+
 fn text(record: &Value, key: &str) -> Option<String> {
     record
         .get(key)
@@ -333,5 +511,100 @@ mod tests {
         assert_eq!(dataset.modality, DatasetModality::AtacSeq);
         assert_eq!(dataset.sample_count, Some(2));
         assert_eq!(dataset.accession, "ENCSR123ABC");
+    }
+
+    #[test]
+    fn rejects_datasets_that_only_match_the_treatment_not_the_disease() {
+        let brief = ResearchBrief {
+            question: "What drives cisplatin resistance in lung cancer?".into(),
+            population: Some("Adults with lung cancer".into()),
+            intervention: Some("cisplatin".into()),
+            comparison: None,
+            outcomes: vec!["treatment response".into()],
+            keywords: vec![],
+            date_from: None,
+            date_to: None,
+            study_types: vec![],
+        };
+        let relevant = PublicDataset {
+            id: "relevant".into(),
+            accession: "GSE1".into(),
+            title: "Cisplatin resistance in lung cancer".into(),
+            source: "NCBI GEO".into(),
+            modality: DatasetModality::BulkRna,
+            organism: Some("Homo sapiens".into()),
+            sample_count: Some(12),
+            summary: "RNA-seq of lung cancer cells after cisplatin exposure.".into(),
+            data_types: vec!["RNA-seq".into()],
+            access: "open".into(),
+            url: "https://example.com/relevant".into(),
+        };
+        let unrelated = PublicDataset {
+            id: "unrelated".into(),
+            accession: "GSE2".into(),
+            title: "Cisplatin-induced acute liver injury".into(),
+            source: "NCBI GEO".into(),
+            modality: DatasetModality::BulkRna,
+            organism: Some("Mus musculus".into()),
+            sample_count: Some(8),
+            summary: "A hepatotoxicity study of cisplatin treatment.".into(),
+            data_types: vec!["RNA-seq".into()],
+            access: "open".into(),
+            url: "https://example.com/unrelated".into(),
+        };
+
+        assert!(dataset_matches_research_context(&relevant, &brief));
+        assert!(!dataset_matches_research_context(&unrelated, &brief));
+    }
+
+    #[test]
+    fn falls_back_to_question_concepts_when_structured_context_is_absent() {
+        let brief = ResearchBrief {
+            question: "What drives cisplatin resistance in gastric cancer?".into(),
+            population: None,
+            intervention: None,
+            comparison: None,
+            outcomes: vec![],
+            keywords: vec![],
+            date_from: None,
+            date_to: None,
+            study_types: vec![],
+        };
+        let dataset = PublicDataset {
+            id: "wrong-disease".into(),
+            accession: "GSE3".into(),
+            title: "FTO knockdown in osteosarcoma".into(),
+            source: "NCBI GEO".into(),
+            modality: DatasetModality::BulkRna,
+            organism: Some("Homo sapiens".into()),
+            sample_count: Some(6),
+            summary: "Cisplatin resistance in osteosarcoma cells.".into(),
+            data_types: vec!["RNA-seq".into()],
+            access: "open".into(),
+            url: "https://example.com/wrong-disease".into(),
+        };
+
+        assert_eq!(
+            research_context_terms(&brief),
+            vec!["cisplatin", "resistance", "gastric", "cancer"]
+        );
+        assert!(!dataset_matches_research_context(&dataset, &brief));
+    }
+
+    #[test]
+    fn uses_english_keywords_when_population_is_not_searchable_in_source_metadata() {
+        let brief = ResearchBrief {
+            question: "肺癌有哪些可复用的公共数据集？".into(),
+            population: Some("肺癌患者".into()),
+            intervention: None,
+            comparison: None,
+            outcomes: vec![],
+            keywords: vec!["lung cancer".into()],
+            date_from: None,
+            date_to: None,
+            study_types: vec![],
+        };
+
+        assert_eq!(research_context_terms(&brief), vec!["lung", "cancer"]);
     }
 }
