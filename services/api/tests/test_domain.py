@@ -11,9 +11,11 @@ from paperpilot.domain.models import (
 )
 
 
-def test_research_brief_requires_a_meaningful_question() -> None:
+def test_research_brief_accepts_a_concise_nonblank_question() -> None:
+    assert ResearchBrief(question="青光眼研究").question == "青光眼研究"
+
     with pytest.raises(ValidationError):
-        ResearchBrief(question="short")
+        ResearchBrief(question="   ")
 
 
 def test_evidence_record_normalizes_external_identifiers() -> None:

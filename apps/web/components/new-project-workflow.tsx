@@ -15,7 +15,7 @@ import { RunWorkspaceClient } from "./run-workspace-client";
 
 export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
   const router = useRouter();
-  const [model] = useConversationModel();
+  const [model, setModel] = useConversationModel();
   const [loadingProject, setLoadingProject] = useState(Boolean(projectId));
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -65,7 +65,7 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
   if (projectId) {
     return (
       <div className="project-start-workspace">
-        <NewResearchForm onSubmit={start} />
+        <NewResearchForm model={model} onModelChange={setModel} onSubmit={start} />
         <div className="run-report-state" aria-live="polite">
           <span className="report-waiting-icon" aria-hidden="true"><FileClock size={25} /></span>
           <h1>从研究问题开始</h1>
@@ -74,5 +74,5 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
       </div>
     );
   }
-  return <NewResearchForm onSubmit={start} />;
+  return <NewResearchForm model={model} onModelChange={setModel} onSubmit={start} />;
 }

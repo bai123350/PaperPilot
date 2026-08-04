@@ -33,7 +33,7 @@ services:
       PAPERPILOT_DATABASE_URL: postgresql+psycopg://paperpilot:paperpilot@db:5432/paperpilot
       PAPERPILOT_REDIS_URL: redis://redis:6379/0
       PAPERPILOT_WEB_ORIGIN: http://localhost:3000
-      PAPERPILOT_DEMO_MODE: "true"
+      PAPERPILOT_DEMO_MODE: ${PAPERPILOT_DEMO_MODE:-false}
       PAPERPILOT_LOCAL_AUTH_ENABLED: "false"
       PAPERPILOT_TASK_ALWAYS_EAGER: "false"
       PAPERPILOT_STORAGE_BACKEND: local

@@ -53,7 +53,7 @@ class RunStage(str, Enum):
 
 
 class ResearchBrief(BaseModel):
-    question: Annotated[str, Field(min_length=20, max_length=2000)]
+    question: Annotated[str, Field(min_length=1, max_length=2000)]
     population: str | None = None
     intervention: str | None = None
     comparison: str | None = None
@@ -64,7 +64,7 @@ class ResearchBrief(BaseModel):
     study_types: list[str] = Field(default_factory=list)
     model: Annotated[str, Field(min_length=1, max_length=200)] | None = None
 
-    @field_validator("question")
+    @field_validator("question", mode="before")
     @classmethod
     def trim_question(cls, value: str) -> str:
         return value.strip()

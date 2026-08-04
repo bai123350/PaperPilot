@@ -42,6 +42,24 @@ describe("PaperPilotApi", () => {
     expect(localStorage.getItem("paperpilot_access_token")).toBe("token-2");
   });
 
+  it("formats FastAPI validation details instead of displaying object placeholders", async () => {
+    localStorage.setItem("paperpilot_access_token", "token-1");
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        detail: [{
+          type: "string_too_short",
+          loc: ["body", "question"],
+          msg: "String should have at least 20 characters",
+        }],
+      }), { status: 422 }),
+    );
+    const api = new PaperPilotApi("http://api.test");
+
+    await expect(api.createRun("project-1", { question: "青光眼研究" })).rejects.toThrow(
+      "研究问题：String should have at least 20 characters",
+    );
+  });
+
   it("delivers streamed assistant deltas before the persisted message", async () => {
     localStorage.setItem("paperpilot_access_token", "token-1");
     const encoder = new TextEncoder();

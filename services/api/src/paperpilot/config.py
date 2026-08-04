@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./paperpilot.db"
     redis_url: str = "redis://localhost:6379/0"
     web_origin: str = "http://localhost:3000"
-    demo_mode: bool = True
+    demo_mode: bool = False
     local_auth_enabled: bool = True
     task_always_eager: bool = True
     auth_secret: str = "development-only-change-this-secret"
@@ -38,9 +38,3 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     qwen_api_key: str | None = None
     qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-
-    @model_validator(mode="after")
-    def require_deepseek_for_live_runs(self) -> "Settings":
-        if not self.demo_mode and not self.deepseek_api_key:
-            raise ValueError("PAPERPILOT_DEEPSEEK_API_KEY is required when demo mode is disabled")
-        return self

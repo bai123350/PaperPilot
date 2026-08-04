@@ -112,6 +112,35 @@ export interface RunOperationList {
 
 const tokenKey = "paperpilot_access_token";
 
+function formatApiError(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((issue) => formatValidationIssue(issue))
+      .filter((message): message is string => Boolean(message));
+    if (messages.length) return messages.join("；");
+  }
+  if (detail && typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message.trim()) return record.message;
+  }
+  return fallback;
+}
+
+function formatValidationIssue(issue: unknown): string | null {
+  if (typeof issue === "string") return issue;
+  if (!issue || typeof issue !== "object") return null;
+  const record = issue as Record<string, unknown>;
+  if (typeof record.msg !== "string") return null;
+  const location = Array.isArray(record.loc)
+    ? record.loc.filter((part) => part !== "body").at(-1)
+    : null;
+  const field = location === "question" ? "研究问题" : location;
+  return typeof field === "string" || typeof field === "number"
+    ? `${field}：${record.msg}`
+    : record.msg;
+}
+
 export class PaperPilotApi {
   constructor(private readonly baseUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000") {}
 
@@ -349,7 +378,9 @@ export class PaperPilotApi {
       const payload = JSON.parse(data.join("\n"));
       if (event === "delta") onDelta(payload.content);
       if (event === "complete") result = payload;
-      if (event === "error") throw new Error(payload.detail ?? "研究对话暂时不可用");
+      if (event === "error") {
+        throw new Error(formatApiError(payload.detail, "研究对话暂时不可用"));
+      }
     };
 
     while (true) {
@@ -406,7 +437,7 @@ export class PaperPilotApi {
   private async read<T>(response: Response): Promise<T> {
     if (!response.ok) {
       const payload = await response.json().catch(() => ({ detail: response.statusText }));
-      throw new Error(payload.detail ?? `Request failed (${response.status})`);
+      throw new Error(formatApiError(payload.detail, `Request failed (${response.status})`));
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;

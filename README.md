@@ -41,12 +41,18 @@ Start the web app in another terminal:
 npm run dev
 ```
 
-Open `http://localhost:3000`. Demo mode uses an offline literature fixture and a deterministic evidence report, so no API keys are required.
+Open `http://localhost:3000`, use **模型设置** to save an OpenAI-compatible provider and API Key,
+then start a research run. The default is live mode: literature and public datasets are retrieved
+from their real upstream sources and the configured model performs evidence-grounded synthesis.
+
+Demo mode is reserved for deterministic development and tests. Enable it explicitly with
+`$env:PAPERPILOT_DEMO_MODE = "true"` before starting the API when an offline fixture is required.
 
 ## DeepSeek synthesis
 
-Live research runs use DeepSeek for evidence-grounded report synthesis. Disable demo mode and
-provide the API key before starting the API. Install the declared API dependencies first:
+Live research runs use the provider configured in the Web model settings for evidence-grounded
+report synthesis. A process-level key remains available for unattended deployments. Install the
+declared API dependencies first:
 
 ```powershell
 uv pip install --python .venv\Scripts\python.exe -e "services/api[dev]"
@@ -55,7 +61,6 @@ uv pip install --python .venv\Scripts\python.exe -e "services/api[dev]"
 Start the DeepSeek-enabled API on port `8010` in one PowerShell terminal:
 
 ```powershell
-$env:PAPERPILOT_DEMO_MODE = "false"
 $env:PAPERPILOT_LOCAL_AUTH_ENABLED = "true"
 $env:PAPERPILOT_DEEPSEEK_API_KEY = "your-api-key"
 $env:PAPERPILOT_DEEPSEEK_MODEL = "deepseek-v4-pro"
@@ -75,8 +80,8 @@ Open `http://localhost:3000` and use `http://localhost:8010/docs` for the API do
 port `3000` is already occupied by an older PaperPilot process, stop that process before restarting
 the web app so the new `NEXT_PUBLIC_API_URL` takes effect.
 
-The defaults are `https://api.deepseek.com` and `deepseek-v4-pro`, with high reasoning effort and
-thinking enabled. Set
+The default model selection is `deepseek-v4-pro`. Configure its API Key in the Web model settings,
+or set `PAPERPILOT_DEEPSEEK_API_KEY` for an unattended service. Set
 `PAPERPILOT_DEEPSEEK_BASE_URL` to route requests through a compliant enterprise gateway. Confirm
 that the selected service contract prohibits training on and retention of customer data before
 using private research material. PowerShell `$env:` values apply only to the current terminal; do

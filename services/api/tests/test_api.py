@@ -169,6 +169,23 @@ def test_start_run_returns_the_persisted_failed_state(tmp_path: Path) -> None:
         assert response.json()["error"] == "Research run failed"
 
 
+def test_create_run_accepts_a_concise_research_question(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        headers = login(client)
+        project = client.post(
+            "/v1/projects", headers=headers, json={"name": "Concise question"}
+        ).json()
+
+        response = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=headers,
+            json={"question": "青光眼研究"},
+        )
+
+        assert response.status_code == 202
+        assert response.json()["status"] == "queued"
+
+
 def test_run_conversation_persists_and_revises_report_with_current_evidence(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         headers = login(client)

@@ -3,8 +3,6 @@ import json
 import httpx
 import pytest
 from openai import AsyncOpenAI
-from pydantic import ValidationError
-
 from paperpilot.config import Settings
 from paperpilot.domain.models import EvidenceRecord, Paper, ResearchBrief
 from paperpilot.models.deepseek import (
@@ -205,10 +203,13 @@ def test_model_factory_routes_supported_models_to_their_provider(
     assert model.provider == expected_provider
 
 
-def test_live_mode_requires_deepseek_key_but_demo_mode_does_not() -> None:
+def test_live_mode_is_default_and_credentials_can_be_configured_per_user() -> None:
+    assert Settings(_env_file=None).demo_mode is False
+    assert Settings(demo_mode=False, deepseek_api_key=None).deepseek_api_key is None
     assert Settings(demo_mode=True, deepseek_api_key=None).deepseek_api_key is None
-    with pytest.raises(ValidationError, match="PAPERPILOT_DEEPSEEK_API_KEY"):
-        Settings(demo_mode=False, deepseek_api_key=None)
+
+    with pytest.raises(ModelProviderError, match="not configured"):
+        create_model_client(Settings(demo_mode=False), "deepseek-v4-pro")
 
 
 class InvalidEvidenceModel:

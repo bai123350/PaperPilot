@@ -12,7 +12,7 @@ PaperPilot is a web-first biomedical research workspace. The Next.js client owns
 6. Generate claims and exactly three recommendations. Model-generated evidence IDs must belong to the current run.
 7. Persist the versioned report and evidence records, then expose HTML, JSON, SSE, and Markdown views.
 
-The demo connector and deterministic synthesizer make local development reproducible. Production enables real connectors with `PAPERPILOT_DEMO_MODE=false` and enables the model synthesizer only when all model settings are present.
+Live connectors are the default. PubMed, Europe PMC, Crossref, OpenAlex, GEO, and ENCODE execute against their real upstream services, while the model synthesizer resolves the authenticated user's encrypted provider settings (or a process-level provider key for unattended deployments). The demo connector and deterministic synthesizer remain available only when `PAPERPILOT_DEMO_MODE=true` is set explicitly for reproducible tests or offline development.
 
 ## Boundaries
 

@@ -13,6 +13,30 @@ from paperpilot.database import (
 from paperpilot.run_service import RunService
 
 
+def test_default_run_service_uses_live_sources(tmp_path: Path) -> None:
+    database = Database(f"sqlite:///{tmp_path / 'live-sources.db'}")
+    database.create_schema()
+    service = RunService(
+        database,
+        Settings(
+            _env_file=None,
+            database_url=f"sqlite:///{tmp_path / 'live-sources.db'}",
+            storage_path=tmp_path / "uploads",
+        ),
+    )
+
+    assert {connector.name for connector in service._connectors("missing-project")} == {
+        "pubmed",
+        "europe_pmc",
+        "crossref",
+        "openalex",
+    }
+    assert {connector.name for connector in service._dataset_connectors()} == {
+        "ncbi_geo_datasets",
+        "encode_datasets",
+    }
+
+
 def test_demo_run_persists_safe_ordered_operations(tmp_path: Path) -> None:
     database = Database(f"sqlite:///{tmp_path / 'run-operations.db'}")
     database.create_schema()
