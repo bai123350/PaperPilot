@@ -62,6 +62,7 @@ class ResearchBrief(BaseModel):
     date_from: int | None = Field(default=None, ge=1900, le=2100)
     date_to: int | None = Field(default=None, ge=1900, le=2100)
     study_types: list[str] = Field(default_factory=list)
+    model: Annotated[str, Field(min_length=1, max_length=200)] | None = None
 
     @field_validator("question")
     @classmethod

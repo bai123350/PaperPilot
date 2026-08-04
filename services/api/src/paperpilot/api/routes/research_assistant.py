@@ -5,11 +5,13 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-from paperpilot.api.deps import current_user
+from paperpilot.api.deps import current_user, get_session
 from paperpilot.database import UserEntity
 from paperpilot.domain.models import ResearchBrief
-from paperpilot.models.deepseek import DeepSeekModel, ModelProviderError
+from paperpilot.models.deepseek import ModelProviderError
+from paperpilot.models.provider import create_model_client
 
 
 router = APIRouter(prefix="/v1/research-assistant", tags=["research-assistant"])
@@ -35,18 +37,20 @@ class ResearchAssistantResponse(BaseModel):
 async def create_message(
     payload: ResearchAssistantRequest,
     request: Request,
-    _user: Annotated[UserEntity, Depends(current_user)],
+    user: Annotated[UserEntity, Depends(current_user)],
+    session: Annotated[Session, Depends(get_session)],
 ) -> ResearchAssistantResponse:
     settings = request.app.state.settings
     if settings.demo_mode:
         reply = _demo_reply(payload.brief)
     else:
-        model = DeepSeekModel(
-            api_key=settings.deepseek_api_key,
-            base_url=settings.deepseek_base_url,
-            model=settings.deepseek_model,
-        )
+        model = None
         try:
+            model = create_model_client(
+                settings,
+                payload.brief.model,
+                stored=request.app.state.model_settings_store.resolve(session, user.id),
+            )
             context = json.dumps(payload.brief.model_dump(mode="json"), ensure_ascii=False)
             reply = await model.complete_text(
                 (
@@ -64,7 +68,8 @@ async def create_message(
                 detail="研究助手暂时不可用，请稍后重试",
             ) from exc
         finally:
-            await model.aclose()
+            if model is not None:
+                await model.aclose()
     return ResearchAssistantResponse(message=AssistantMessage(role="assistant", content=reply))
 
 

@@ -13,6 +13,7 @@ from paperpilot.models.deepseek import (
     ModelResponseError,
     TransientModelProviderError,
 )
+from paperpilot.models.provider import create_model_client
 from paperpilot.services.llm_synthesis import LlmReportSynthesizer
 
 
@@ -174,6 +175,34 @@ def test_deepseek_configuration_defaults_and_custom_gateway() -> None:
     assert settings.deepseek_base_url == "https://api.deepseek.com"
     assert settings.deepseek_model == "deepseek-v4-pro"
     assert custom.deepseek_base_url == "https://gateway.example/v1"
+
+
+@pytest.mark.parametrize(
+    ("selected", "key_field", "key", "expected_url", "expected_provider"),
+    [
+        ("deepseek-v4-flash", "deepseek_api_key", "deepseek-key", "https://api.deepseek.com", "deepseek"),
+        ("gpt-5-mini", "openai_api_key", "openai-key", "https://api.openai.com/v1", "openai"),
+        (
+            "qwen-plus",
+            "qwen_api_key",
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen",
+        ),
+    ],
+)
+def test_model_factory_routes_supported_models_to_their_provider(
+    selected: str,
+    key_field: str,
+    key: str,
+    expected_url: str,
+    expected_provider: str,
+) -> None:
+    model = create_model_client(Settings(**{key_field: key}), selected)  # type: ignore[arg-type]
+
+    assert model.model == selected
+    assert model.base_url == expected_url
+    assert model.provider == expected_provider
 
 
 def test_live_mode_requires_deepseek_key_but_demo_mode_does_not() -> None:

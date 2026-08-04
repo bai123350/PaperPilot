@@ -1,16 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FileClock } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import {
   api,
   type ResearchAssistantMessage,
   type ResearchBriefInput,
 } from "../lib/api";
+import { useConversationModel } from "../lib/conversation-model";
 import { NewResearchForm } from "./new-research-form";
 import { RunWorkspaceClient } from "./run-workspace-client";
 
 export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
+  const router = useRouter();
+  const [model] = useConversationModel();
   const [loadingProject, setLoadingProject] = useState(Boolean(projectId));
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -44,12 +49,12 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
           brief.population ? `研究人群：${brief.population}` : "探索性生物医学研究情报",
         );
     await Promise.all(files.map((file) => api.uploadPdf(project.id, file)));
-    const run = await api.createRun(project.id, brief);
+    const run = await api.createRun(project.id, { ...brief, model });
     await api.bootstrapRunConversation(run.id, messages);
-    if (!projectId) {
-      window.history.replaceState(window.history.state, "", `/projects/${project.id}`);
-    }
     setActiveRunId(run.id);
+    if (!projectId) {
+      router.replace(`/projects/${project.id}`);
+    }
   }
 
   if (loadingProject) {
@@ -57,5 +62,17 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
   }
   if (loadError) return <div className="error-banner">{loadError}</div>;
   if (activeRunId) return <RunWorkspaceClient runId={activeRunId} />;
+  if (projectId) {
+    return (
+      <div className="project-start-workspace">
+        <NewResearchForm onSubmit={start} />
+        <div className="run-report-state" aria-live="polite">
+          <span className="report-waiting-icon" aria-hidden="true"><FileClock size={25} /></span>
+          <h1>从研究问题开始</h1>
+          <p>提交问题后，检索、证据抽取和研究综合会在左侧持续更新，报告将在这里生成。</p>
+        </div>
+      </div>
+    );
+  }
   return <NewResearchForm onSubmit={start} />;
 }

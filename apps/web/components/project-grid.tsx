@@ -1,9 +1,17 @@
 import Link from "next/link";
-import { ArrowUpRight, FileSearch, FolderKanban } from "lucide-react";
+import { ArrowUpRight, BookOpenCheck, FileSearch, Trash2 } from "lucide-react";
 
 import type { ProjectRecord } from "../lib/api";
 
-export function ProjectGrid({ projects }: { projects: ProjectRecord[] }) {
+export function ProjectGrid({
+  projects,
+  deletingProjectId,
+  onDelete,
+}: {
+  projects: ProjectRecord[];
+  deletingProjectId?: string | null;
+  onDelete?: (project: ProjectRecord) => Promise<void> | void;
+}) {
   if (!projects.length) {
     return (
       <div className="empty-state">
@@ -19,10 +27,24 @@ export function ProjectGrid({ projects }: { projects: ProjectRecord[] }) {
       {projects.map((project) => (
         <article className="project-card" key={project.id}>
           <div className="project-card-topline">
-            <span className="project-icon"><FolderKanban size={18} aria-hidden="true" /></span>
-            <time dateTime={project.updated_at}>
-              {new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(project.updated_at))}
-            </time>
+            <span className="project-icon"><BookOpenCheck size={20} aria-hidden="true" /></span>
+            <div className="project-card-meta">
+              <time dateTime={project.updated_at}>
+                {new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(project.updated_at))}
+              </time>
+              {onDelete ? (
+                <button
+                  className="project-delete-button"
+                  type="button"
+                  aria-label={`删除项目：${project.name}`}
+                  title="删除项目"
+                  disabled={deletingProjectId === project.id}
+                  onClick={() => void onDelete(project)}
+                >
+                  <Trash2 size={15} aria-hidden="true" />
+                </button>
+              ) : null}
+            </div>
           </div>
           <h2>{project.name}</h2>
           <p>{project.description || "生物医学研究情报项目"}</p>

@@ -27,11 +27,13 @@ class DeepSeekModel:
         api_key: str,
         base_url: str = "https://api.deepseek.com",
         model: str = "deepseek-v4-pro",
+        provider: str = "deepseek",
         client: AsyncOpenAI | Any | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self.provider = provider
         self.client = client or AsyncOpenAI(api_key=api_key, base_url=self.base_url, timeout=120)
         self._owns_client = client is None
 
@@ -64,11 +66,9 @@ class DeepSeekModel:
                     {"role": "user", "content": user_content},
                 ],
                 stream=False,
-                temperature=0.1,
                 max_tokens=8192,
                 response_format={"type": "json_object"},
-                reasoning_effort="high",
-                extra_body={"thinking": {"type": "enabled"}},
+                **self._provider_options(temperature=0.1),
             )
         except (openai.APITimeoutError, openai.APIConnectionError):
             raise TransientModelProviderError("DeepSeek is temporarily unavailable") from None
@@ -119,9 +119,7 @@ class DeepSeekModel:
                 model=self.model,
                 messages=[{"role": "system", "content": system_prompt}, *messages],
                 stream=False,
-                temperature=0.2,
-                reasoning_effort="high",
-                extra_body={"thinking": {"type": "enabled"}},
+                **self._provider_options(temperature=0.2),
             )
         except (openai.APITimeoutError, openai.APIConnectionError):
             raise TransientModelProviderError("DeepSeek is temporarily unavailable") from None
@@ -150,9 +148,7 @@ class DeepSeekModel:
                 model=self.model,
                 messages=[{"role": "system", "content": system_prompt}, *messages],
                 stream=True,
-                temperature=0.2,
-                reasoning_effort="high",
-                extra_body={"thinking": {"type": "enabled"}},
+                **self._provider_options(temperature=0.2),
             )
             async for chunk in stream:
                 try:
@@ -175,3 +171,14 @@ class DeepSeekModel:
     async def aclose(self) -> None:
         if self._owns_client:
             await self.client.close()
+
+    def _provider_options(self, *, temperature: float) -> dict[str, Any]:
+        if self.provider == "deepseek":
+            return {
+                "temperature": temperature,
+                "reasoning_effort": "high",
+                "extra_body": {"thinking": {"type": "enabled"}},
+            }
+        if self.provider == "openai":
+            return {"reasoning_effort": "high"}
+        return {"temperature": temperature}

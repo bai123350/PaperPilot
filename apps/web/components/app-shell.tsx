@@ -2,46 +2,51 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpenCheck, FolderKanban, Plus, Settings } from "lucide-react";
+import { ArrowLeft, BookOpenCheck, Plus, Settings, ShieldCheck } from "lucide-react";
 
-const navigation = [
-  { href: "/", label: "研究项目", icon: FolderKanban },
-  { href: "/projects/new", label: "新建研究", icon: Plus },
-  { href: "/settings", label: "数据设置", icon: Settings },
-];
+import { ModelSettingsControl } from "./model-settings-control";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const workspace = pathname.startsWith("/runs/")
+    || (pathname.startsWith("/projects/") && pathname !== "/projects/new");
+
+  if (workspace) {
+    return (
+      <div className="app-shell app-shell-workspace">
+        <header className="workspace-titlebar">
+          <Link href="/"><ArrowLeft size={16} aria-hidden="true" />项目</Link>
+          <strong>PaperPilot 研究工作区</strong>
+          <div className="workspace-titlebar-actions">
+            <ModelSettingsControl compact />
+            <Link href="/settings"><Settings size={15} aria-hidden="true" />数据设置</Link>
+            <span><ShieldCheck size={15} aria-hidden="true" />证据可追溯</span>
+          </div>
+        </header>
+        <main className="workspace-main">{children}</main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <Link className="brand" href="/" aria-label="PaperPilot 首页">
-          <span className="brand-mark"><BookOpenCheck size={22} aria-hidden="true" /></span>
+      <header className="web-header">
+        <Link className="web-brand" href="/" aria-label="PaperPilot 首页">
+          <BookOpenCheck size={25} aria-hidden="true" />
           <span><strong>PaperPilot</strong><small>Biomedical intelligence</small></span>
         </Link>
         <nav aria-label="主导航">
-          {navigation.map((item) => {
-            const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-            return (
-              <Link className={active ? "active" : ""} href={item.href} key={item.href}>
-                <item.icon size={18} aria-hidden="true" />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
+          <ModelSettingsControl />
+          <Link href="/projects/new"><Plus size={16} aria-hidden="true" /><span>新建研究</span></Link>
+          <Link href="/settings"><Settings size={16} aria-hidden="true" /><span>数据设置</span></Link>
+          <span><ShieldCheck size={15} aria-hidden="true" />研究数据受保护</span>
         </nav>
-        <div className="sidebar-footer">
-          <span className="security-dot" />
-          <span><strong>隐私模式</strong><small>原文件 24h 清理</small></span>
+      </header>
+      <main className="main-frame">
+        <div className="page-content">
+          {children}
         </div>
-      </aside>
-      <div className="main-frame">
-        <header className="topbar" suppressHydrationWarning>
-          <span className="topbar-context">Research workspace</span>
-          <div className="researcher-avatar" aria-label="当前用户">PR</div>
-        </header>
-        <div className="page-content">{children}</div>
-      </div>
+      </main>
     </div>
   );
 }

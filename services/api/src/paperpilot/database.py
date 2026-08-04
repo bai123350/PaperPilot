@@ -36,6 +36,26 @@ class UserEntity(Base):
     name: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     projects: Mapped[list[ProjectEntity]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    model_settings: Mapped[ModelSettingsEntity | None] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+
+
+class ModelSettingsEntity(Base):
+    __tablename__ = "user_model_settings"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(200))
+    base_url: Mapped[str] = mapped_column(String(1000))
+    encrypted_api_key: Mapped[str] = mapped_column(Text)
+    api_key_hint: Mapped[str] = mapped_column(String(32))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    user: Mapped[UserEntity] = relationship(back_populates="model_settings")
 
 
 class ProjectEntity(Base):

@@ -5,6 +5,7 @@ import { Download, Printer } from "lucide-react";
 
 import { api, type RunOperation, type RunRecord } from "../lib/api";
 import type { RunConversationMessage } from "../lib/api";
+import { useConversationModel } from "../lib/conversation-model";
 import { mapReport } from "../lib/report-mapper";
 import type { ReportViewModel } from "../lib/types";
 import { RunWorkspaceView } from "./run-workspace-view";
@@ -22,6 +23,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
   const [conversationPending, setConversationPending] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [conversationError, setConversationError] = useState<string | null>(null);
+  const [model, setModel] = useConversationModel();
 
   const streamReply = useCallback(async (content: string, appendUser: boolean) => {
     const optimisticUser: RunConversationMessage = {
@@ -58,6 +60,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
             : message
         )),
         appendUser,
+        model,
       );
       const conversation = await api.getRunConversation(runId);
       setMessages(conversation.messages);
@@ -72,7 +75,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
       streamActive.current = false;
       setConversationPending(false);
     }
-  }, [runId]);
+  }, [model, runId]);
 
   useEffect(() => {
     let active = true;
@@ -139,7 +142,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
   if (loadError) return <div className="error-banner">{loadError}</div>;
   if (!run) return <div className="run-loading"><span /><p>正在读取研究状态</p></div>;
   return (
-    <>
+    <div className="run-workspace-screen">
       {run.status === "completed" ? (
         <div className="report-toolbar">
           <button type="button" onClick={() => window.print()}><Printer size={16} />打印 / PDF</button>
@@ -154,6 +157,8 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
           canRevise={run.status === "completed" && Boolean(report)}
           reportVersion={reportVersion}
           error={conversationError}
+          model={model}
+          onModelChange={setModel}
           onSend={sendMessage}
           onRetry={
             ["failed", "cancelled"].includes(run.status)
@@ -163,7 +168,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
         />
         <RunWorkspaceView run={run} report={report} />
       </div>
-    </>
+    </div>
   );
 
   async function sendMessage(content: string, action: "discuss" | "revise_report") {
@@ -174,7 +179,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
     setConversationPending(true);
     setConversationError(null);
     try {
-      const response = await api.sendRunMessage(runId, content, action);
+      const response = await api.sendRunMessage(runId, content, action, model);
       const conversation = await api.getRunConversation(runId);
       setMessages(conversation.messages);
       setReportVersion(response.report_version);
