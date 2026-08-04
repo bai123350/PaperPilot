@@ -4,6 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/api";
 import { NewProjectWorkflow } from "./new-project-workflow";
 
+const routerMock = vi.hoisted(() => ({ replace: vi.fn() }));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => routerMock,
+}));
+
 vi.mock("./run-workspace-client", () => ({
   RunWorkspaceClient: ({ runId }: { runId: string }) => (
     <div data-testid="embedded-run">{runId}</div>
@@ -13,11 +19,11 @@ vi.mock("./run-workspace-client", () => ({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  routerMock.replace.mockReset();
 });
 
 describe("NewProjectWorkflow", () => {
-  it("opens the run inline and records a refresh-safe project URL without navigation", async () => {
-    window.history.replaceState({}, "", "/projects/new");
+  it("opens the run inline and synchronizes the App Router project URL", async () => {
     vi.spyOn(api, "createProject").mockResolvedValue({
       id: "project-1",
       name: "Inline research",
@@ -49,6 +55,6 @@ describe("NewProjectWorkflow", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送研究问题" }));
 
     await waitFor(() => expect(screen.getByTestId("embedded-run")).toHaveTextContent("run-1"));
-    expect(window.location.pathname).toBe("/projects/project-1");
+    expect(routerMock.replace).toHaveBeenCalledWith("/projects/project-1");
   });
 });

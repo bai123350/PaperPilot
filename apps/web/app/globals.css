@@ -87,6 +87,27 @@ a { color: inherit; text-decoration: none; }
 .section-title-row h2 { margin: 0; font-size: 18px; }
 .section-title-row a, .project-card > a { display: inline-flex; align-items: center; gap: 5px; color: var(--green); font-weight: 700; }
 .project-count { color: var(--muted); font-size: 11px; }
+.project-create-backdrop {
+  position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 24px;
+  background: rgba(20,34,27,.46); backdrop-filter: blur(2px);
+}
+.project-create-dialog {
+  width: min(460px, 100%); padding: 22px; color: #26342d; background: white;
+  border: 1px solid #cbd5cf; border-radius: 7px; box-shadow: 0 22px 64px rgba(15,31,23,.24);
+}
+.project-create-dialog > header { display: grid; grid-template-columns: 38px 1fr 34px; align-items: center; gap: 10px; }
+.project-create-icon { width: 36px; height: 36px; display: grid; place-items: center; color: var(--green); background: var(--green-soft); border-radius: 6px; }
+.project-create-dialog h2 { margin: 3px 0 0; font-size: 20px; }
+.project-create-dialog > p { margin: 18px 0; color: var(--muted); font-size: 12px; line-height: 1.65; }
+.project-create-close { width: 32px; height: 32px; display: grid; place-items: center; color: var(--muted); background: white; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.project-create-dialog form { display: grid; gap: 7px; }
+.project-create-dialog label { color: #46544c; font-size: 11px; font-weight: 750; }
+.project-create-dialog input { width: 100%; min-height: 40px; padding: 0 10px; color: var(--ink); background: white; border: 1px solid #c7d1cb; border-radius: 4px; outline: 0; }
+.project-create-dialog input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(23,107,82,.1); }
+.project-create-dialog footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; padding-top: 15px; border-top: 1px solid #e0e5e2; }
+.project-create-dialog footer button { min-height: 36px; padding: 0 12px; color: #4a5a51; background: white; border: 1px solid #cdd6d1; border-radius: 4px; font-weight: 750; cursor: pointer; }
+.project-create-dialog footer .project-create-submit { display: inline-flex; align-items: center; gap: 7px; color: white; background: var(--green); border-color: var(--green); }
+.project-create-dialog button:disabled, .project-create-dialog input:disabled { opacity: .55; cursor: default; }
 
 .project-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .project-card {

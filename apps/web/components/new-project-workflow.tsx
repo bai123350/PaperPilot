@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { FileClock } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import {
   api,
@@ -12,6 +13,7 @@ import { NewResearchForm } from "./new-research-form";
 import { RunWorkspaceClient } from "./run-workspace-client";
 
 export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
+  const router = useRouter();
   const [loadingProject, setLoadingProject] = useState(Boolean(projectId));
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -47,10 +49,10 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
     await Promise.all(files.map((file) => api.uploadPdf(project.id, file)));
     const run = await api.createRun(project.id, brief);
     await api.bootstrapRunConversation(run.id, messages);
-    if (!projectId) {
-      window.history.replaceState(window.history.state, "", `/projects/${project.id}`);
-    }
     setActiveRunId(run.id);
+    if (!projectId) {
+      router.replace(`/projects/${project.id}`);
+    }
   }
 
   if (loadingProject) {
