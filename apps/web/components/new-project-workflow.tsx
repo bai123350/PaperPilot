@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { FileClock } from "lucide-react";
 
 import {
   api,
@@ -57,5 +58,17 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
   }
   if (loadError) return <div className="error-banner">{loadError}</div>;
   if (activeRunId) return <RunWorkspaceClient runId={activeRunId} />;
+  if (projectId) {
+    return (
+      <div className="project-start-workspace">
+        <NewResearchForm onSubmit={start} />
+        <div className="run-report-state" aria-live="polite">
+          <span className="report-waiting-icon" aria-hidden="true"><FileClock size={25} /></span>
+          <h1>从研究问题开始</h1>
+          <p>提交问题后，检索、证据抽取和研究综合会在左侧持续更新，报告将在这里生成。</p>
+        </div>
+      </div>
+    );
+  }
   return <NewResearchForm onSubmit={start} />;
 }

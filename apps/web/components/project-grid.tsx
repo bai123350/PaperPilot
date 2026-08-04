@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowUpRight, FileSearch, FolderKanban } from "lucide-react";
+import { ArrowUpRight, BookOpenCheck, FileSearch } from "lucide-react";
 
 import type { ProjectRecord } from "../lib/api";
 
@@ -19,7 +19,7 @@ export function ProjectGrid({ projects }: { projects: ProjectRecord[] }) {
       {projects.map((project) => (
         <article className="project-card" key={project.id}>
           <div className="project-card-topline">
-            <span className="project-icon"><FolderKanban size={18} aria-hidden="true" /></span>
+            <span className="project-icon"><BookOpenCheck size={20} aria-hidden="true" /></span>
             <time dateTime={project.updated_at}>
               {new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(project.updated_at))}
             </time>

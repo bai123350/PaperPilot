@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowRight, Database, FileCheck2, Plus, ShieldCheck } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, type ProjectRecord } from "../lib/api";
@@ -23,21 +23,18 @@ export function ProjectsDashboard() {
     <>
       <section className="page-heading dashboard-heading">
         <div>
-          <span className="eyebrow">PaperPilot Workspace</span>
-          <h1>生物医学研究情报</h1>
-          <p>{projects.length ? `${projects.length} 个活跃研究项目` : "从一个可审计的研究问题开始"}</p>
+          <span className="eyebrow">Web research workspace</span>
+          <h1>研究项目</h1>
+          <p>从研究问题出发，持续查看证据流水线，并在同一工作区阅读报告。</p>
         </div>
-        <Link className="primary-button" href="/projects/new"><Plus size={17} />新建研究</Link>
-      </section>
-
-      <section className="metrics-band" aria-label="工作区概览" suppressHydrationWarning>
-        <div suppressHydrationWarning><Database size={19} /><span><strong>{projects.length}</strong><small>研究项目</small></span></div>
-        <div suppressHydrationWarning><FileCheck2 size={19} /><span><strong>{projects.length ? "100%" : "—"}</strong><small>证据关联</small></span></div>
-        <div suppressHydrationWarning><ShieldCheck size={19} /><span><strong>24h</strong><small>原文件保留</small></span></div>
+        <Link className="primary-button" href="/projects/new"><Plus size={17} />新建项目</Link>
       </section>
 
       <section className="section-block">
-        <div className="section-title-row"><h2>最近项目</h2><Link href="/projects/new">创建新项目 <ArrowRight size={15} /></Link></div>
+        <div className="section-title-row">
+          <h2>最近项目</h2>
+          <span className="project-count">{projects.length} 个项目</span>
+        </div>
         {loading ? (
           <div className="loading-lines">
             <span suppressHydrationWarning />

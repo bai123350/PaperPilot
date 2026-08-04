@@ -139,7 +139,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
   if (loadError) return <div className="error-banner">{loadError}</div>;
   if (!run) return <div className="run-loading"><span /><p>正在读取研究状态</p></div>;
   return (
-    <>
+    <div className="run-workspace-screen">
       {run.status === "completed" ? (
         <div className="report-toolbar">
           <button type="button" onClick={() => window.print()}><Printer size={16} />打印 / PDF</button>
@@ -163,7 +163,7 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
         />
         <RunWorkspaceView run={run} report={report} />
       </div>
-    </>
+    </div>
   );
 
   async function sendMessage(content: string, action: "discuss" | "revise_report") {
