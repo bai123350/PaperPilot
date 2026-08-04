@@ -1,10 +1,11 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from paperpilot.api.app import create_app
 from paperpilot.config import Settings
-from paperpilot.database import RunEntity, RunOperationEntity
+from paperpilot.database import RunEntity, RunOperationEntity, UserEntity
 
 
 def build_client(tmp_path: Path) -> TestClient:
@@ -28,6 +29,71 @@ def start_run(client: TestClient, headers: dict[str, str], run_id: str) -> dict:
     response = client.post(f"/v1/runs/{run_id}/start", headers=headers)
     assert response.status_code == 202
     return response.json()
+
+
+def test_model_api_key_is_encrypted_scoped_and_never_returned(tmp_path: Path) -> None:
+    database_path = tmp_path / "paperpilot.db"
+    with build_client(tmp_path) as client:
+        owner = login(client, "owner@example.com")
+        other = login(client, "other@example.com")
+
+        assert client.get("/v1/model-settings", headers=owner).json()["configured"] is False
+        saved = client.put(
+            "/v1/model-settings",
+            headers=owner,
+            json={
+                "provider": "qwen",
+                "model": "qwen-plus",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "api_key": "qwen-secret-value",
+            },
+        )
+        assert saved.status_code == 200
+        assert saved.json() == {
+            "provider": "qwen",
+            "model": "qwen-plus",
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "configured": True,
+            "api_key_hint": "••••alue",
+        }
+        assert "qwen-secret-value" not in saved.text
+        with client.app.state.database.session() as session:
+            owner_entity = session.scalar(
+                select(UserEntity).where(UserEntity.email == "owner@example.com")
+            )
+            resolved = client.app.state.model_settings_store.resolve(
+                session, owner_entity.id
+            )
+            assert resolved.api_key == "qwen-secret-value"
+            assert resolved.provider == "qwen"
+        assert client.get("/v1/model-settings", headers=other).json()["configured"] is False
+
+        preserved = client.put(
+            "/v1/model-settings",
+            headers=owner,
+            json={
+                "provider": "qwen",
+                "model": "qwen-max",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "api_key": "",
+            },
+        )
+        assert preserved.status_code == 200
+        assert preserved.json()["api_key_hint"] == "••••alue"
+
+        rejected = client.put(
+            "/v1/model-settings",
+            headers=owner,
+            json={
+                "provider": "openai",
+                "model": "gpt-5-mini",
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "",
+            },
+        )
+        assert rejected.status_code == 422
+
+    assert b"qwen-secret-value" not in database_path.read_bytes()
 
 
 def test_project_run_report_and_evidence_flow(tmp_path: Path) -> None:

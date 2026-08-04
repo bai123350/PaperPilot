@@ -23,6 +23,7 @@ from paperpilot.domain.operations import OperationKind, OperationTaskKind, Opera
 from paperpilot.services.pipeline import ResearchPipeline
 from paperpilot.services.operation_recorder import OperationRecorder
 from paperpilot.services.llm_synthesis import LlmReportSynthesizer
+from paperpilot.services.model_settings import ModelSettingsStore
 from paperpilot.models.deepseek import ModelProviderError
 from paperpilot.models.provider import create_model_client
 from paperpilot.parsing.grobid import GrobidPdfParser
@@ -31,9 +32,17 @@ from paperpilot.storage.factory import create_object_store
 
 
 class RunService:
-    def __init__(self, database: Database, settings: Settings) -> None:
+    def __init__(
+        self,
+        database: Database,
+        settings: Settings,
+        model_settings_store: ModelSettingsStore | None = None,
+    ) -> None:
         self.database = database
         self.settings = settings
+        self.model_settings_store = model_settings_store or ModelSettingsStore(
+            settings.auth_secret
+        )
 
     def execute(self, run_id: str) -> None:
         with self.database.session() as session:
@@ -42,11 +51,16 @@ class RunService:
                 return
             run.status = RunStatus.RUNNING.value
             brief = ResearchBrief.model_validate(run.brief)
+            stored_model_settings = (
+                None
+                if self.settings.demo_mode
+                else self.model_settings_store.resolve(session, run.project.user_id)
+            )
 
         pipeline = ResearchPipeline(
             connectors=self._connectors(run.project_id),
             dataset_connectors=self._dataset_connectors(),
-            synthesizer=self._synthesizer(brief.model),
+            synthesizer=self._synthesizer(brief.model, stored_model_settings),
         )
         operation_recorder = OperationRecorder(self.database)
 
@@ -151,10 +165,12 @@ class RunService:
             EncodeDatasetConnector(),
         ]
 
-    def _synthesizer(self, model=None):
+    def _synthesizer(self, model=None, stored=None):
         if self.settings.demo_mode:
             return None
-        return LlmReportSynthesizer(create_model_client(self.settings, model))
+        return LlmReportSynthesizer(
+            create_model_client(self.settings, model, stored=stored)
+        )
 
     @staticmethod
     def _safe_error(exc: Exception) -> str:

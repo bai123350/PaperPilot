@@ -27,12 +27,23 @@ from paperpilot.domain.operations import (
     OperationUpdate,
 )
 from paperpilot.models.deepseek import DeepSeekModel, ModelProviderError, ModelResponseError
-from paperpilot.models.provider import ConversationModel, create_model_client
+from paperpilot.models.provider import (
+    ConversationModel,
+    ModelClientConfig,
+    create_model_client,
+)
 from paperpilot.services.llm_synthesis import SynthesisPayload
 from paperpilot.services.operation_recorder import OperationRecorder
 
 
 router = APIRouter(prefix="/v1/runs/{run_id}/conversation", tags=["run-conversation"])
+
+BUILT_IN_MODELS = {
+    "deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "gpt-5-mini",
+    "qwen-plus",
+}
 
 
 class ConversationMessage(BaseModel):
@@ -54,14 +65,14 @@ class SendMessageRequest(BaseModel):
     contract_version: Literal["1.0"] = "1.0"
     content: str = Field(min_length=1, max_length=4000)
     action: Literal["discuss", "revise_report"] = "discuss"
-    model: ConversationModel | None = None
+    model: ConversationModel | None = Field(default=None, min_length=1, max_length=200)
 
 
 class StreamMessageRequest(BaseModel):
     contract_version: Literal["1.0"] = "1.0"
     content: str = Field(min_length=1, max_length=4000)
     append_user: bool = True
-    model: ConversationModel | None = None
+    model: ConversationModel | None = Field(default=None, min_length=1, max_length=200)
 
 
 class SendMessageResponse(BaseModel):
@@ -148,6 +159,7 @@ async def send_message(
     session: Annotated[Session, Depends(get_session)],
 ) -> SendMessageResponse:
     run = owned_run(session, user.id, run_id)
+    _validate_requested_model(request, session, user.id, payload.model)
     if payload.action == "revise_report" and run.status != RunStatus.COMPLETED.value:
         raise HTTPException(status_code=409, detail="研究完成后才能修订报告")
 
@@ -206,7 +218,12 @@ async def send_message(
             reply, report_updated = _demo_response(run, payload, evidence)
         else:
             reply, report_updated = await _model_response(
-                run, payload, recent, evidence, request.app.state.settings
+                run,
+                payload,
+                recent,
+                evidence,
+                request.app.state.settings,
+                request.app.state.model_settings_store.resolve(session, user.id),
             )
     except ModelProviderError as exc:
         operations.fail(
@@ -285,6 +302,7 @@ async def stream_message(
     session: Annotated[Session, Depends(get_session)],
 ) -> EventSourceResponse:
     run = owned_run(session, user.id, run_id)
+    _validate_requested_model(request, session, user.id, payload.model)
     content = payload.content.strip()
     if payload.append_user:
         user_message = ConversationMessageEntity(
@@ -361,7 +379,13 @@ async def stream_message(
 
                     source = demo_chunks()
                 else:
-                    model = create_model_client(request.app.state.settings, payload.model)
+                    model = create_model_client(
+                        request.app.state.settings,
+                        payload.model,
+                        stored=request.app.state.model_settings_store.resolve(
+                            stream_session, user.id
+                        ),
+                    )
                     context = {
                         "run": {
                             "status": current_run.status,
@@ -461,6 +485,20 @@ async def stream_message(
     return EventSourceResponse(generate())
 
 
+def _validate_requested_model(
+    request: Request,
+    session: Session,
+    user_id: str,
+    model: str | None,
+) -> None:
+    if model is None or model in BUILT_IN_MODELS:
+        return
+    configured = request.app.state.model_settings_store.public(session, user_id)
+    if configured["configured"] and configured["model"] == model:
+        return
+    raise HTTPException(status_code=422, detail="未配置所请求的模型")
+
+
 def _demo_response(
     run: RunEntity,
     payload: SendMessageRequest,
@@ -515,8 +553,13 @@ async def _model_response(
     recent: list[ConversationMessageEntity],
     evidence: list[EvidenceEntity],
     settings: object,
+    stored_model_settings: ModelClientConfig | None,
 ) -> tuple[GroundedReply, dict | None]:
-    model = create_model_client(settings, payload.model)
+    model = create_model_client(
+        settings,
+        payload.model,
+        stored=stored_model_settings,
+    )
     try:
         evidence_payload = [
             {

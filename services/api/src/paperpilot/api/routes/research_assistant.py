@@ -5,8 +5,9 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-from paperpilot.api.deps import current_user
+from paperpilot.api.deps import current_user, get_session
 from paperpilot.database import UserEntity
 from paperpilot.domain.models import ResearchBrief
 from paperpilot.models.deepseek import ModelProviderError
@@ -36,7 +37,8 @@ class ResearchAssistantResponse(BaseModel):
 async def create_message(
     payload: ResearchAssistantRequest,
     request: Request,
-    _user: Annotated[UserEntity, Depends(current_user)],
+    user: Annotated[UserEntity, Depends(current_user)],
+    session: Annotated[Session, Depends(get_session)],
 ) -> ResearchAssistantResponse:
     settings = request.app.state.settings
     if settings.demo_mode:
@@ -44,7 +46,11 @@ async def create_message(
     else:
         model = None
         try:
-            model = create_model_client(settings, payload.brief.model)
+            model = create_model_client(
+                settings,
+                payload.brief.model,
+                stored=request.app.state.model_settings_store.resolve(session, user.id),
+            )
             context = json.dumps(payload.brief.model_dump(mode="json"), ensure_ascii=False)
             reply = await model.complete_text(
                 (

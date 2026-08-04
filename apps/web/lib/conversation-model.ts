@@ -8,11 +8,7 @@ const changeEvent = "paperpilot:conversation-model-change";
 export function readConversationModel(): ConversationModel {
   if (typeof window === "undefined") return "deepseek-v4-pro";
   const saved = window.localStorage.getItem(storageKey);
-  return saved === "deepseek-v4-flash"
-    || saved === "gpt-5-mini"
-    || saved === "qwen-plus"
-    ? saved
-    : "deepseek-v4-pro";
+  return saved?.trim() || "deepseek-v4-pro";
 }
 
 export function useConversationModel() {

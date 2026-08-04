@@ -49,11 +49,24 @@ export interface RunConversation {
   messages: RunConversationMessage[];
 }
 
-export type ConversationModel =
-  | "deepseek-v4-flash"
-  | "deepseek-v4-pro"
-  | "gpt-5-mini"
-  | "qwen-plus";
+export type ConversationModel = string;
+
+export type ModelProvider = "deepseek" | "openai" | "qwen" | "custom";
+
+export interface ModelSettings {
+  provider: ModelProvider;
+  model: string;
+  base_url: string;
+  configured: boolean;
+  api_key_hint: string | null;
+}
+
+export interface SaveModelSettingsInput {
+  provider: ModelProvider;
+  model: string;
+  base_url: string;
+  api_key: string;
+}
 
 export type RunOperationStatus = "running" | "completed" | "failed";
 export type RunOperationTaskKind = "research_run" | "discussion" | "report_revision";
@@ -132,6 +145,17 @@ export class PaperPilotApi {
 
   async deleteProject(id: string): Promise<void> {
     await this.authenticated<void>(`/v1/projects/${id}`, { method: "DELETE" });
+  }
+
+  async getModelSettings(): Promise<ModelSettings> {
+    return this.authenticated<ModelSettings>("/v1/model-settings");
+  }
+
+  async saveModelSettings(input: SaveModelSettingsInput): Promise<ModelSettings> {
+    return this.authenticated<ModelSettings>("/v1/model-settings", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
   }
 
   async createRun(projectId: string, brief: ResearchBriefInput): Promise<RunRecord> {

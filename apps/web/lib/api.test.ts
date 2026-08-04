@@ -124,4 +124,35 @@ describe("PaperPilotApi", () => {
       model: "deepseek-v4-flash",
     });
   });
+
+  it("sends model credentials only in the authenticated settings request", async () => {
+    localStorage.setItem("paperpilot_access_token", "token-1");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        provider: "openai",
+        model: "gpt-5-mini",
+        base_url: "https://api.openai.com/v1",
+        configured: true,
+        api_key_hint: "••••cret",
+      }), { status: 200 }),
+    );
+    const api = new PaperPilotApi("http://api.test");
+
+    await api.saveModelSettings({
+      provider: "openai",
+      model: "gpt-5-mini",
+      base_url: "https://api.openai.com/v1",
+      api_key: "openai-secret",
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("http://api.test/v1/model-settings");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "PUT",
+      headers: expect.objectContaining({ Authorization: "Bearer token-1" }),
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      api_key: "openai-secret",
+    });
+    expect(localStorage.getItem("openai-secret")).toBeNull();
+  });
 });
