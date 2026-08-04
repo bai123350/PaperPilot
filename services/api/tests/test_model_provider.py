@@ -260,6 +260,11 @@ async def test_synthesizer_rejects_model_citations_outside_the_evidence_set() ->
         )
 
 
+def test_synthesis_prompts_require_simplified_chinese_narrative() -> None:
+    assert "所有叙述性字段必须使用简洁、专业的简体中文" in LlmReportSynthesizer._system_prompt()
+    assert "所有叙述性字段必须使用简体中文" in LlmReportSynthesizer._correction_prompt()
+
+
 class InvalidPayloadModel:
     def __init__(self, payload: dict) -> None:
         self.payload = payload

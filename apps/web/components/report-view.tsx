@@ -37,7 +37,7 @@ export function ReportView({ report }: ReportViewProps) {
         <section className="report-intro">
           <div className="section-kicker">
             <ShieldCheck size={16} aria-hidden="true" />
-            Evidence-first report · Schema {report.schemaVersion}
+            证据优先报告 · 结构版本 {report.schemaVersion}
           </div>
           <h1>{report.title}</h1>
           <p>{report.summary}</p>
@@ -234,7 +234,7 @@ function EvidenceDrawer({ evidence, onClose }: { evidence: EvidenceView; onClose
     <aside className="evidence-drawer" aria-label="证据详情">
       <div className="drawer-header">
         <div>
-          <span className="section-kicker">Evidence Record</span>
+          <span className="section-kicker">证据记录</span>
           <h2>原文证据</h2>
         </div>
         <button className="icon-button" type="button" onClick={onClose} aria-label="关闭证据">

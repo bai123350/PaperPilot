@@ -574,10 +574,11 @@ async def _model_response(
             current = Report.model_validate(run.report)
             raw = await model.complete_json(
                 (
-                    "Revise the biomedical research report from the user's instruction. Use only "
-                    "the supplied immutable evidence records. Every claim and recommendation must "
-                    "cite allowed evidence IDs, and there must be exactly three recommendations. "
-                    "Return only JSON matching output_schema. Reply content must be Simplified Chinese."
+                    "你是 PaperPilot 生物医学报告修订器。根据用户要求修订报告，但只能使用提供的不可变 "
+                    "Evidence Record。摘要、主题、主要结论、争议、研究空白以及三个研究建议中的所有"
+                    "叙述性字段必须使用简洁、专业的简体中文。每个结论和建议必须引用 allowed evidence "
+                    "ID，建议必须恰好三项。DOI、PMID、evidence ID、基因和蛋白符号、通用生物医学缩写"
+                    "以及必要的来源标题保持原样。只返回符合 output_schema 的 JSON。"
                 ),
                 {
                     "instruction": payload.content,

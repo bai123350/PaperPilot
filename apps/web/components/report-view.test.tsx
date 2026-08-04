@@ -72,6 +72,7 @@ describe("ReportView", () => {
       />,
     );
 
+    expect(screen.getByText(/证据优先报告/)).toBeInTheDocument();
     expect(screen.getByText("Prospective cohorts report useful discrimination.")).toBeInTheDocument();
     expect(screen.getAllByTestId("recommendation-card")).toHaveLength(3);
     expect(screen.getAllByTestId("dataset-card")).toHaveLength(2);

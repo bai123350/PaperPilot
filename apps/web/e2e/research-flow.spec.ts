@@ -15,7 +15,7 @@ test("creates an evidence report and opens its source record", async ({ page }, 
   await expect(page).toHaveURL(/\/projects\/[^/]+$/);
   await expect(page.getByRole("heading", { name: "研究对话" })).toBeVisible();
   await expect(page.getByRole("article", { name: /研究操作：/ }).first()).toBeVisible();
-  await expect(page.getByText(/Evidence-first report/)).toBeVisible();
+  await expect(page.getByText(/证据优先报告/)).toBeVisible();
   await expect(page.getByTestId("recommendation-card")).toHaveCount(3);
   await expect(page.getByTestId("dataset-card")).toHaveCount(5);
   await page.getByRole("button", { name: "ATAC 1" }).click();

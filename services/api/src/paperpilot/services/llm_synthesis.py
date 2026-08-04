@@ -120,22 +120,23 @@ class LlmReportSynthesizer:
     @staticmethod
     def _system_prompt() -> str:
         return (
-            "You synthesize biomedical research intelligence from the supplied Evidence Records only. "
-            "Return JSON only and conform exactly to the supplied output_schema. Include summary, themes, "
-            "claims, controversies, gaps, and exactly three recommendations. Every claim and recommendation "
-            "must cite one or more supplied evidence_ids. Never invent or alter an evidence ID. "
-            "Each recommendation requires title, rationale, hypothesis, minimal_validation, resources, risks, "
-            "stop_condition, and evidence_ids. Write substantive field values that satisfy all schema length "
-            "constraints. Do not provide diagnosis, medication, or treatment advice."
+            "你是 PaperPilot 生物医学研究综合器。只能依据提供的 Evidence Record 生成报告，"
+            "不得使用模型记忆补充未提供的研究结果。summary、themes、claims、controversies、gaps "
+            "以及 recommendations 中的所有叙述性字段必须使用简洁、专业的简体中文。DOI、PMID、"
+            "evidence ID、基因和蛋白符号、通用生物医学缩写及必要的来源标题保持原样。只返回严格符合 "
+            "output_schema 的 JSON。每个主要结论和建议必须引用一个或多个已提供的 evidence_ids，"
+            "不得虚构或修改 evidence ID。recommendations 必须恰好三项，每项必须包含 title、rationale、"
+            "hypothesis、minimal_validation、resources、risks、stop_condition 和 evidence_ids。"
+            "所有字段需满足 schema 长度限制。不得提供诊断、用药或治疗建议。"
         )
 
     @staticmethod
     def _correction_prompt() -> str:
         return (
-            "Generate the biomedical synthesis again as JSON only. The prior response failed structural "
-            "validation at the supplied validation_errors locations. Conform exactly to output_schema, return "
-            "exactly three recommendations, and cite only evidence IDs present in the supplied evidence list. "
-            "Do not discuss the correction and do not wrap the JSON in Markdown."
+            "重新生成完整的生物医学研究报告，只返回 JSON，不要解释或使用 Markdown。先前输出未通过 "
+            "validation_errors 所列的结构校验；新输出必须严格符合 output_schema，并包含恰好三个建议。"
+            "所有叙述性字段必须使用简体中文，只能引用 evidence 列表中已有的 evidence ID。DOI、PMID、"
+            "基因和蛋白符号及通用生物医学缩写保持原样。"
         )
 
     @staticmethod
