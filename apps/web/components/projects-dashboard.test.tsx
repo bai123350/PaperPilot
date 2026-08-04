@@ -42,4 +42,24 @@ describe("ProjectsDashboard", () => {
     ));
     expect(routerMock.push).toHaveBeenCalledWith("/projects/project-1");
   });
+
+  it("confirms and removes a project after the API deletion succeeds", async () => {
+    const project = {
+      id: "project-delete",
+      name: "待删除项目",
+      description: "测试项目",
+      created_at: "2026-08-04T00:00:00Z",
+      updated_at: "2026-08-04T00:00:00Z",
+    };
+    vi.spyOn(api, "listProjects").mockResolvedValue([project]);
+    vi.spyOn(api, "deleteProject").mockResolvedValue(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<ProjectsDashboard />);
+    expect(await screen.findByText("待删除项目")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "删除项目：待删除项目" }));
+
+    await waitFor(() => expect(api.deleteProject).toHaveBeenCalledWith("project-delete"));
+    await waitFor(() => expect(screen.queryByText("待删除项目")).not.toBeInTheDocument());
+  });
 });

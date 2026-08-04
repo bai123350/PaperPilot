@@ -12,6 +12,7 @@ export function ProjectsDashboard() {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +46,22 @@ export function ProjectsDashboard() {
     }
   }
 
+  async function deleteProject(project: ProjectRecord) {
+    if (deletingProjectId) return;
+    const confirmed = window.confirm(`确认删除项目“${project.name}”？\n项目、运行、报告、证据和上传材料将一并删除。`);
+    if (!confirmed) return;
+    setDeletingProjectId(project.id);
+    setError(null);
+    try {
+      await api.deleteProject(project.id);
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "项目删除失败");
+    } finally {
+      setDeletingProjectId(null);
+    }
+  }
+
   return (
     <>
       <section className="page-heading dashboard-heading">
@@ -71,7 +88,13 @@ export function ProjectsDashboard() {
           </div>
         ) : null}
         {error ? <div className="error-banner">{error}</div> : null}
-        {!loading && !error ? <ProjectGrid projects={projects} /> : null}
+        {!loading ? (
+          <ProjectGrid
+            projects={projects}
+            deletingProjectId={deletingProjectId}
+            onDelete={deleteProject}
+          />
+        ) : null}
       </section>
 
       {createOpen ? (
