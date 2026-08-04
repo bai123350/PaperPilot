@@ -3,6 +3,12 @@ import type { ReportViewModel } from "./types";
 interface ApiPaper {
   id: string;
   title: string;
+  authors?: string[];
+  journal?: string | null;
+  year?: number | null;
+  pmid?: string | null;
+  doi?: string | null;
+  url?: string | null;
 }
 
 interface ApiEvidence {
@@ -18,6 +24,12 @@ interface ApiReport {
   schema_version: string;
   title: string;
   summary: string;
+  timeline?: Array<{
+    year: number;
+    title: string;
+    description: string;
+    paper_ids: string[];
+  }>;
   themes?: string[];
   claims: Array<{ id: string; statement: string; evidence_ids: string[] }>;
   evidence: ApiEvidence[];
@@ -48,6 +60,7 @@ interface ApiReport {
   papers: ApiPaper[];
   controversies?: string[];
   gaps?: string[];
+  disclaimer?: string;
 }
 
 export function mapReport(report: ApiReport): ReportViewModel {
@@ -56,6 +69,12 @@ export function mapReport(report: ApiReport): ReportViewModel {
     schemaVersion: report.schema_version,
     title: report.title,
     summary: report.summary,
+    timeline: (report.timeline ?? []).map((item) => ({
+      year: item.year,
+      title: item.title,
+      description: item.description,
+      paperIds: item.paper_ids,
+    })),
     themes: report.themes ?? [],
     controversies: report.controversies ?? [],
     gaps: report.gaps ?? [],
@@ -96,5 +115,16 @@ export function mapReport(report: ApiReport): ReportViewModel {
       stopCondition: item.stop_condition,
       evidenceIds: item.evidence_ids,
     })),
+    references: report.papers.map((paper) => ({
+      id: paper.id,
+      title: paper.title,
+      authors: paper.authors ?? [],
+      journal: paper.journal,
+      year: paper.year,
+      pmid: paper.pmid,
+      doi: paper.doi,
+      url: paper.url,
+    })),
+    disclaimer: report.disclaimer,
   };
 }

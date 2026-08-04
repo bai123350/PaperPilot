@@ -4,7 +4,14 @@ from typing import Annotated, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
-from paperpilot.domain.models import Claim, EvidenceRecord, Paper, Recommendation, ResearchBrief
+from paperpilot.domain.models import (
+    Claim,
+    EvidenceRecord,
+    Paper,
+    Recommendation,
+    ResearchBrief,
+    TimelineItem,
+)
 from paperpilot.models.deepseek import ModelResponseError
 
 
@@ -14,6 +21,7 @@ class JsonModel(Protocol):
 
 class SynthesisPayload(BaseModel):
     summary: Annotated[str, Field(min_length=20, max_length=6000)]
+    timeline: list[TimelineItem] = Field(default_factory=list)
     themes: list[str]
     claims: Annotated[list[Claim], Field(min_length=1)]
     controversies: list[str]
@@ -110,6 +118,18 @@ class LlmReportSynthesizer:
         unknown = cited - allowed
         if unknown:
             raise ModelResponseError("DeepSeek cited evidence outside the current research run")
+        allowed_paper_ids = {item.id for item in papers}
+        unknown_timeline_papers = {
+            paper_id
+            for item in synthesis.timeline
+            for paper_id in item.paper_ids
+            if paper_id not in allowed_paper_ids
+        }
+        if unknown_timeline_papers:
+            raise ModelResponseError("DeepSeek cited a paper outside the current research run timeline")
+        synthesis = synthesis.model_copy(
+            update={"timeline": sorted(synthesis.timeline, key=lambda item: item.year)}
+        )
         return synthesis.model_dump(mode="json")
 
     async def aclose(self) -> None:
@@ -127,6 +147,11 @@ class LlmReportSynthesizer:
             "output_schema 的 JSON。每个主要结论和建议必须引用一个或多个已提供的 evidence_ids，"
             "不得虚构或修改 evidence ID。recommendations 必须恰好三项，每项必须包含 title、rationale、"
             "hypothesis、minimal_validation、resources、risks、stop_condition 和 evidence_ids。"
+            "timeline 必须按发表年份升序，用中文归纳该年论文取得的具体成果；每项只能引用 papers 中"
+            "已有的 paper_ids。主要结论必须跨论文综合：先说明共同证据观察，再给出涉及具体细胞类型、"
+            "基因或蛋白、通路或表型且有边界的生物学解释，最后说明证据边界或替代解释。区分描述性、"
+            "关联性、预测性、因果性和机制性结论；摘要级或观察性证据只能使用“提示、关联、一致”等"
+            "审慎措辞。controversies 同时覆盖证据争议与研究局限。避免空泛陈述。"
             "所有字段需满足 schema 长度限制。不得提供诊断、用药或治疗建议。"
         )
 

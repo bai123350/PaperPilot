@@ -409,6 +409,13 @@ a { color: inherit; text-decoration: none; }
 .report-intro > p { max-width: 830px; margin: 0; color: #4f5d56; font-size: 16px; line-height: 1.75; }
 .tag-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
 .tag { padding: 5px 8px; color: #4f5d56; background: white; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; }
+.report-timeline { position: relative; display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.report-timeline::before { position: absolute; top: 14px; bottom: 14px; left: 42px; width: 1px; content: ""; background: #bfd1c7; }
+.report-timeline li { position: relative; display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 18px; padding: 8px 0 18px; }
+.report-timeline li::before { position: absolute; z-index: 1; top: 14px; left: 37px; width: 9px; height: 9px; content: ""; background: white; border: 2px solid var(--green); border-radius: 50%; }
+.report-timeline time { color: var(--green); font-size: 12px; font-weight: 800; }
+.report-timeline strong { display: block; margin-bottom: 5px; font-size: 14px; }
+.report-timeline p { margin: 0; color: var(--muted); line-height: 1.65; }
 .report-section { padding: 38px 0; border-bottom: 1px solid var(--line); }
 .claim-list { border-top: 1px solid var(--line); }
 .claim-row { display: grid; grid-template-columns: 24px 1fr; gap: 12px; padding: 18px 0; border-bottom: 1px solid var(--line); }
@@ -444,6 +451,8 @@ a { color: inherit; text-decoration: none; }
 .gap-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 28px; margin: 0; padding: 0; list-style: none; }
 .gap-list li { position: relative; padding: 13px 13px 13px 31px; background: var(--gold-soft); border-left: 3px solid var(--gold); }
 .gap-list li::before { content: "!"; position: absolute; left: 12px; color: var(--gold); font-weight: 900; }
+.limitation-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.limitation-list li { padding: 13px 15px; color: #58645d; background: #f4f6f4; border-left: 3px solid #9aa8a0; line-height: 1.65; }
 .recommendation-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .recommendation-card {
   position: relative; min-height: 0; display: grid;
@@ -461,6 +470,15 @@ a { color: inherit; text-decoration: none; }
 .recommendation-card dt { margin-bottom: 4px; color: var(--green); font-size: 10px; font-weight: 800; text-transform: uppercase; }
 .recommendation-card dd { margin: 0; color: #435048; line-height: 1.5; }
 .recommendation-card .text-button { grid-column: 1; grid-row: 4; justify-self: start; margin-top: 17px; }
+.reference-list { display: grid; margin: 0; padding: 0; border-top: 1px solid var(--line); list-style-position: inside; }
+.reference-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 18px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+.reference-list strong { line-height: 1.5; }
+.reference-list p { margin: 5px 0; color: var(--muted); font-size: 12px; }
+.reference-list small { color: #718078; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.reference-list a { display: inline-flex; align-items: center; gap: 5px; color: var(--green); font-size: 12px; font-weight: 750; white-space: nowrap; }
+.report-disclaimer { display: flex; align-items: flex-start; gap: 9px; padding: 24px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.report-disclaimer svg { flex: none; margin-top: 2px; color: var(--green); }
+.report-disclaimer p { margin: 0; }
 .evidence-drawer {
   position: fixed; z-index: 50; inset: 0 0 0 auto; width: min(440px, 100vw); padding: 26px;
   overflow-y: auto; color: var(--ink); background: white; border-left: 1px solid var(--line); box-shadow: -16px 0 40px rgba(16,30,24,.16);
@@ -513,6 +531,10 @@ a { color: inherit; text-decoration: none; }
   .page-heading { align-items: start; flex-direction: column; margin-bottom: 24px; }
   .page-heading h1, .narrow-heading h1 { font-size: 29px; }
   .project-grid, .loading-lines, .form-grid, .gap-list, .run-grid { grid-template-columns: 1fr; }
+  .report-timeline li { grid-template-columns: 66px minmax(0, 1fr); gap: 12px; }
+  .report-timeline::before { left: 32px; }
+  .report-timeline li::before { left: 27px; }
+  .reference-list li { grid-template-columns: 1fr; gap: 8px; }
   .research-form { border-inline: 0; }
   .research-chat-start { min-height: calc(100dvh - 250px); border-inline: 0; }
   .research-chat-messages { min-height: 220px; padding: 20px 18px; }

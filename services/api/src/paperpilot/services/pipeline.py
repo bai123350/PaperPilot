@@ -95,6 +95,7 @@ class ResearchPipeline:
         papers: list[Paper] = []
         related_datasets: list[PublicDataset] = []
         evidence: list[EvidenceRecord] = []
+        timeline: list[TimelineItem] = []
 
         on_stage(RunStage.PLANNING)
         operation_id = operations.start(
@@ -278,6 +279,7 @@ class ResearchPipeline:
             themes = synthesis["themes"]
             controversies = synthesis["controversies"]
             gaps = synthesis["gaps"]
+            timeline = [TimelineItem.model_validate(item) for item in synthesis.get("timeline", [])]
             operations.complete(synthesis_operation_id)
             on_stage(RunStage.RECOMMENDING)
             recommendation_operation_id = operations.start(
@@ -337,16 +339,7 @@ class ResearchPipeline:
             title=brief.question.rstrip("?？"),
             summary=summary,
             themes=themes,
-            timeline=[
-                TimelineItem(
-                    year=paper.year,
-                    title=paper.title,
-                    description=paper.abstract[:220],
-                    paper_ids=[paper.id],
-                )
-                for paper in papers
-                if paper.year is not None
-            ],
+            timeline=timeline or self._fallback_timeline(papers),
             claims=claims,
             evidence=evidence,
             related_datasets=related_datasets,
@@ -367,6 +360,19 @@ class ResearchPipeline:
             seen.add(key)
             unique.append(dataset)
         return unique
+
+    @staticmethod
+    def _fallback_timeline(papers: list[Paper]) -> list[TimelineItem]:
+        return [
+            TimelineItem(
+                year=paper.year,
+                title=paper.title,
+                description=paper.abstract[:220],
+                paper_ids=[paper.id],
+            )
+            for paper in papers
+            if paper.year is not None
+        ]
 
     @staticmethod
     def _recommendations(evidence: list[EvidenceRecord]) -> list[Recommendation]:

@@ -8,6 +8,12 @@ describe("mapReport", () => {
       schema_version: "1.1",
       title: "Biomarker landscape",
       summary: "Evidence summary",
+      timeline: [{
+        year: 2024,
+        title: "Prospective validation",
+        description: "The cohort validated the biomarker.",
+        paper_ids: ["p1"],
+      }],
       themes: ["外部验证"],
       claims: [{ id: "c1", statement: "A supported claim", evidence_ids: ["e1"] }],
       evidence: [
@@ -49,7 +55,14 @@ describe("mapReport", () => {
           evidence_ids: ["e1"],
         },
       ],
-      papers: [{ id: "p1", title: "Prospective validation study" }],
+      papers: [{
+        id: "p1",
+        title: "Prospective validation study",
+        authors: ["Zhang L"],
+        journal: "Translational Medicine",
+        year: 2024,
+        pmid: "123",
+      }],
       controversies: [],
       gaps: ["No external cohort"],
     });
@@ -58,5 +71,7 @@ describe("mapReport", () => {
     expect(report.evidence[0].paperTitle).toBe("Prospective validation study");
     expect(report.recommendations[0].minimalValidation).toBe("Use an independent cohort.");
     expect(report.relatedDatasets?.[0].sampleCount).toBe(24);
+    expect(report.timeline?.[0].paperIds).toEqual(["p1"]);
+    expect(report.references?.[0].journal).toBe("Translational Medicine");
   });
 });

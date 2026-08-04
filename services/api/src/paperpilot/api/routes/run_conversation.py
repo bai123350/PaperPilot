@@ -564,6 +564,7 @@ async def _model_response(
         evidence_payload = [
             {
                 "id": item.id,
+                "paper_id": item.payload.get("paper_id"),
                 "excerpt": item.payload.get("excerpt"),
                 "locator": item.payload.get("locator"),
                 "evidence_type": item.payload.get("evidence_type"),
@@ -578,11 +579,19 @@ async def _model_response(
                     "Evidence Record。摘要、主题、主要结论、争议、研究空白以及三个研究建议中的所有"
                     "叙述性字段必须使用简洁、专业的简体中文。每个结论和建议必须引用 allowed evidence "
                     "ID，建议必须恰好三项。DOI、PMID、evidence ID、基因和蛋白符号、通用生物医学缩写"
-                    "以及必要的来源标题保持原样。只返回符合 output_schema 的 JSON。"
+                    "以及必要的来源标题保持原样。时间线必须按年份升序排列，且每项只能引用当前研究运行中的 paper ID。"
+                    "主要结论必须进行跨文献综合，明确具体细胞、基因、蛋白、通路或表型，并在结尾说明证据边界或替代解释。"
+                    "按照描述性、关联性、预测性、因果性和机制性证据层级校准措辞；争议字段同时包含研究局限。"
+                    "每项建议必须完整包含证据依据、可检验假设、最小验证方案、数据与资源需求、风险和停止条件。"
+                    "避免空泛表述。只返回符合 output_schema 的 JSON。"
                 ),
                 {
                     "instruction": payload.content,
                     "current_report": current.model_dump(mode="json", exclude={"evidence", "papers"}),
+                    "papers": [
+                        {"id": item.id, "title": item.title, "year": item.year}
+                        for item in current.papers
+                    ],
                     "evidence": evidence_payload,
                     "output_schema": SynthesisPayload.model_json_schema(),
                 },
@@ -600,9 +609,19 @@ async def _model_response(
             }
             if cited - allowed:
                 raise ModelResponseError("Model cited evidence outside this research run")
+            allowed_papers = {item.id for item in current.papers}
+            timeline_papers = {
+                paper_id for item in synthesis.timeline for paper_id in item.paper_ids
+            }
+            if timeline_papers - allowed_papers:
+                raise ModelResponseError("Model cited a paper outside this research run timeline")
             revised = current.model_copy(
                 update={
                     **synthesis.model_dump(),
+                    "timeline": sorted(
+                        synthesis.timeline or current.timeline,
+                        key=lambda item: item.year,
+                    ),
                     "generated_at": datetime.now(timezone.utc),
                 }
             )

@@ -335,6 +335,14 @@ class CorrectingPayloadModel:
         }
         return {
             "summary": "A corrected and sufficiently detailed evidence-grounded synthesis.",
+            "timeline": [
+                {
+                    "year": 2024,
+                    "title": "External validation",
+                    "description": "A prospective cohort validated the reported association.",
+                    "paper_ids": ["paper-1"],
+                }
+            ],
             "themes": ["External validation"],
             "claims": [
                 {
@@ -360,6 +368,7 @@ async def test_synthesizer_corrects_one_invalid_structured_response() -> None:
     )
 
     assert len(result["recommendations"]) == 3
+    assert result["timeline"][0]["paper_ids"] == ["paper-1"]
     assert len(model.calls) == 2
     assert "output_schema" in model.calls[0][1]
     assert model.calls[1][1]["validation_errors"]

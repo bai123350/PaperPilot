@@ -11,6 +11,15 @@ describe("ReportView", () => {
           schemaVersion: "1.1",
           title: "Circulating biomarkers in treatment response",
           summary: "Prospective evidence is promising but externally validated cohorts remain limited.",
+          timeline: [{
+            year: 2024,
+            title: "Prospective validation",
+            description: "A prospective cohort established external validity.",
+            paperIds: ["paper-1"],
+          }],
+          themes: ["External validation"],
+          controversies: ["Cohort definitions remain heterogeneous."],
+          gaps: ["Independent replication remains limited."],
           claims: [
             {
               id: "claim-1",
@@ -68,6 +77,15 @@ describe("ReportView", () => {
               evidenceIds: ["evidence-1"],
             }),
           ),
+          references: [{
+            id: "paper-1",
+            title: "Prospective biomarker validation",
+            authors: ["Zhang L"],
+            journal: "Translational Medicine",
+            year: 2024,
+            pmid: "12345678",
+          }],
+          disclaimer: "本报告仅供科研用途。",
         }}
       />,
     );
@@ -75,8 +93,15 @@ describe("ReportView", () => {
     expect(screen.getByText(/证据优先报告/)).toBeInTheDocument();
     expect(screen.getByText("Prospective cohorts report useful discrimination.")).toBeInTheDocument();
     expect(screen.getAllByTestId("recommendation-card")).toHaveLength(3);
+    expect(screen.getByRole("heading", { name: "进展时间线" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "主题版图" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "争议与局限" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "参考文献" })).toBeInTheDocument();
+    expect(screen.getAllByText("Biobank")).toHaveLength(3);
+    expect(screen.getAllByText("Spectrum bias")).toHaveLength(3);
+    expect(screen.getByText("本报告仅供科研用途。")).toBeInTheDocument();
     expect(screen.getAllByTestId("dataset-card")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: /查看证据/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /查看 1 条证据/i })).toHaveLength(4);
 
     fireEvent.click(screen.getByRole("button", { name: "ATAC 1" }));
     expect(screen.getAllByTestId("dataset-card")).toHaveLength(1);

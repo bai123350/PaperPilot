@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   ArrowRight,
   BookOpenText,
+  CalendarDays,
   CheckCircle2,
   Database,
   ExternalLink,
@@ -41,19 +42,42 @@ export function ReportView({ report }: ReportViewProps) {
           </div>
           <h1>{report.title}</h1>
           <p>{report.summary}</p>
-          {report.themes?.length ? (
-            <div className="tag-row" aria-label="研究主题">
-              {report.themes.map((theme) => (
-                <span className="tag" key={theme}>{theme}</span>
-              ))}
-            </div>
-          ) : null}
         </section>
+
+        {report.timeline?.length ? (
+          <section className="report-section" aria-labelledby="timeline-heading">
+            <div className="section-heading">
+              <div><span className="section-number">01</span><h2 id="timeline-heading">进展时间线</h2></div>
+            </div>
+            <ol className="report-timeline">
+              {report.timeline.map((item, index) => (
+                <li key={`${item.year}-${item.title}-${index}`}>
+                  <time>{item.year}</time>
+                  <div>
+                    <strong>{item.title}</strong>
+                    <p>{item.description}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
+
+        {report.themes?.length ? (
+          <section className="report-section" aria-labelledby="themes-heading">
+            <div className="section-heading">
+              <div><span className="section-number">02</span><h2 id="themes-heading">主题版图</h2></div>
+            </div>
+            <div className="tag-row" aria-label="研究主题">
+              {report.themes.map((theme) => <span className="tag" key={theme}>{theme}</span>)}
+            </div>
+          </section>
+        ) : null}
 
         <section className="report-section" aria-labelledby="claims-heading">
           <div className="section-heading">
             <div>
-              <span className="section-number">01</span>
+              <span className="section-number">03</span>
               <h2 id="claims-heading">主要结论</h2>
             </div>
             <span className="section-meta">{report.claims.length} 条证据化结论</span>
@@ -70,7 +94,7 @@ export function ReportView({ report }: ReportViewProps) {
                     onClick={() => setSelectedEvidenceId(claim.evidenceIds[0])}
                   >
                     <BookOpenText size={15} aria-hidden="true" />
-                    查看证据
+                    查看 {claim.evidenceIds.length} 条证据
                   </button>
                 </div>
               </article>
@@ -80,12 +104,26 @@ export function ReportView({ report }: ReportViewProps) {
 
         <RelatedDatasets datasets={report.relatedDatasets ?? []} />
 
+        {report.controversies?.length ? (
+          <section className="report-section" aria-labelledby="controversies-heading">
+            <div className="section-heading">
+              <div>
+                <span className="section-number">05</span>
+                <h2 id="controversies-heading">争议与局限</h2>
+              </div>
+            </div>
+            <ul className="limitation-list">
+              {report.controversies.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </section>
+        ) : null}
+
         {report.gaps?.length ? (
           <section className="report-section" aria-labelledby="gaps-heading">
             <div className="section-heading">
               <div>
-                <span className="section-number">03</span>
-                <h2 id="gaps-heading">证据空白</h2>
+                <span className="section-number">06</span>
+                <h2 id="gaps-heading">研究空白</h2>
               </div>
             </div>
             <ul className="gap-list">
@@ -97,8 +135,8 @@ export function ReportView({ report }: ReportViewProps) {
         <section className="report-section" aria-labelledby="recommendations-heading">
           <div className="section-heading">
             <div>
-              <span className="section-number">04</span>
-              <h2 id="recommendations-heading">下一步研究方案</h2>
+              <span className="section-number">07</span>
+              <h2 id="recommendations-heading">三个下一步方案</h2>
             </div>
             <span className="section-meta">按验证成本排序</span>
           </div>
@@ -112,6 +150,8 @@ export function ReportView({ report }: ReportViewProps) {
                 <dl>
                   <div><dt>可检验假设</dt><dd>{item.hypothesis}</dd></div>
                   <div><dt>最小验证</dt><dd>{item.minimalValidation}</dd></div>
+                  <div><dt>数据与资源</dt><dd>{item.resources.join("、")}</dd></div>
+                  <div><dt>风险</dt><dd>{item.risks.join("、")}</dd></div>
                   <div><dt>停止条件</dt><dd>{item.stopCondition}</dd></div>
                 </dl>
                 <button
@@ -119,12 +159,47 @@ export function ReportView({ report }: ReportViewProps) {
                   type="button"
                   onClick={() => setSelectedEvidenceId(item.evidenceIds[0])}
                 >
-                  追溯依据 <ArrowRight size={15} aria-hidden="true" />
+                  查看 {item.evidenceIds.length} 条证据 <ArrowRight size={15} aria-hidden="true" />
                 </button>
               </article>
             ))}
           </div>
         </section>
+
+        {report.references?.length ? (
+          <section className="report-section" aria-labelledby="references-heading">
+            <div className="section-heading">
+              <div><span className="section-number">08</span><h2 id="references-heading">参考文献</h2></div>
+              <span className="section-meta">{report.references.length} 篇已纳入文献</span>
+            </div>
+            <ol className="reference-list">
+              {report.references.map((item) => {
+                const href = item.url
+                  ?? (item.pmid ? `https://pubmed.ncbi.nlm.nih.gov/${item.pmid}/` : null)
+                  ?? (item.doi ? `https://doi.org/${item.doi}` : null);
+                return (
+                  <li key={item.id}>
+                    <div>
+                      <strong>{item.title}</strong>
+                      <p>
+                        {item.authors.length ? item.authors.slice(0, 5).join("、") : "作者信息未获取"}
+                        {item.journal ? ` · ${item.journal}` : ""}
+                        {item.year ? ` · ${item.year}` : ""}
+                      </p>
+                      <small>{item.pmid ? `PMID ${item.pmid}` : item.doi ? `DOI ${item.doi}` : "来源标识未获取"}</small>
+                    </div>
+                    {href ? <a href={href} target="_blank" rel="noreferrer">查看来源 <ExternalLink size={14} /></a> : null}
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        ) : null}
+
+        <footer className="report-disclaimer">
+          <CalendarDays size={16} aria-hidden="true" />
+          <p>{report.disclaimer ?? "本报告仅供科研用途，不构成临床诊断或治疗建议。"}</p>
+        </footer>
       </main>
 
       {selectedEvidence ? (
@@ -153,7 +228,7 @@ function RelatedDatasets({ datasets }: { datasets: PublicDatasetView[] }) {
     <section className="report-section dataset-section" aria-labelledby="datasets-heading">
       <div className="section-heading">
         <div>
-          <span className="section-number">02</span>
+          <span className="section-number">04</span>
           <h2 id="datasets-heading">相关公共数据集</h2>
         </div>
         <span className="section-meta">

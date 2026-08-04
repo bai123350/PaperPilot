@@ -13,6 +13,24 @@ export interface ClaimView {
   evidenceIds: string[];
 }
 
+export interface TimelineItemView {
+  year: number;
+  title: string;
+  description: string;
+  paperIds: string[];
+}
+
+export interface ReferenceView {
+  id: string;
+  title: string;
+  authors: string[];
+  journal?: string | null;
+  year?: number | null;
+  pmid?: string | null;
+  doi?: string | null;
+  url?: string | null;
+}
+
 export interface RecommendationView {
   id: string;
   title: string;
@@ -50,6 +68,7 @@ export interface ReportViewModel {
   schemaVersion: string;
   title: string;
   summary: string;
+  timeline?: TimelineItemView[];
   claims: ClaimView[];
   evidence: EvidenceView[];
   recommendations: RecommendationView[];
@@ -57,4 +76,6 @@ export interface ReportViewModel {
   controversies?: string[];
   gaps?: string[];
   relatedDatasets?: PublicDatasetView[];
+  references?: ReferenceView[];
+  disclaimer?: string;
 }
