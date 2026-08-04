@@ -1,7 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Bot, FilePenLine, Send, UserRound } from "lucide-react";
+import {
+  Bot,
+  CheckCircle2,
+  FilePenLine,
+  Gauge,
+  Hand,
+  MessageCircle,
+  Plus,
+  Send,
+  ShieldCheck,
+  UserRound,
+} from "lucide-react";
 
 import type { RunConversationMessage, RunOperation } from "../lib/api";
 import { mergeRunTimeline } from "../lib/run-timeline";
@@ -18,6 +29,14 @@ interface ResearchConversationProps {
   onRetry?: () => void;
 }
 
+type PermissionMode = "ask" | "approve" | "full";
+
+const permissionOptions = [
+  { value: "ask", label: "请求批准", description: "执行扩展操作前始终询问", icon: Hand },
+  { value: "approve", label: "替我审批", description: "仅对风险操作请求批准", icon: Gauge },
+  { value: "full", label: "完全访问权限", description: "允许已启用的扩展能力", icon: ShieldCheck },
+] as const;
+
 export function ResearchConversation({
   messages,
   operations,
@@ -29,13 +48,24 @@ export function ResearchConversation({
   onRetry,
 }: ResearchConversationProps) {
   const listRef = useRef<HTMLDivElement>(null);
+  const actionMenu = useRef<HTMLDetailsElement>(null);
+  const permissionMenu = useRef<HTMLDetailsElement>(null);
   const [content, setContent] = useState("");
   const [action, setAction] = useState<"discuss" | "revise_report">("discuss");
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
+    const saved = window.localStorage.getItem("paperpilot.permissionMode");
+    return saved === "ask" || saved === "full" ? saved : "approve";
+  });
   const timeline = mergeRunTimeline(messages, operations);
+  const selectedPermission = permissionOptions.find((option) => option.value === permissionMode)!;
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages, pending]);
+
+  useEffect(() => {
+    window.localStorage.setItem("paperpilot.permissionMode", permissionMode);
+  }, [permissionMode]);
 
   async function send() {
     const value = content.trim();
@@ -94,25 +124,7 @@ export function ResearchConversation({
 
       <div className="conversation-compose">
         {error ? <p className="conversation-error" role="alert">{error}</p> : null}
-        {canRevise ? (
-          <div className="conversation-mode" aria-label="消息处理方式">
-            <button
-              className={action === "discuss" ? "active" : ""}
-              type="button"
-              onClick={() => setAction("discuss")}
-            >
-              讨论
-            </button>
-            <button
-              className={action === "revise_report" ? "active" : ""}
-              type="button"
-              onClick={() => setAction("revise_report")}
-            >
-              <FilePenLine size={14} aria-hidden="true" />据此修订报告
-            </button>
-          </div>
-        ) : null}
-        <div className="conversation-input-row">
+        <div className="composer-input">
           <textarea
             value={content}
             onChange={(event) => setContent(event.target.value)}
@@ -127,16 +139,85 @@ export function ResearchConversation({
             placeholder={canRevise ? "追问证据，或说明希望如何完善报告" : "补充研究要求或询问当前进度"}
             aria-label="给研究助手发送消息"
           />
-          <button
-            className="assistant-send"
-            type="button"
-            onClick={() => void send()}
-            disabled={!content.trim() || pending}
-            aria-label="发送消息"
-            title="发送消息"
-          >
-            <Send size={17} aria-hidden="true" />
-          </button>
+          <div className="composer-actions">
+            <div className="composer-actions-left">
+              <details
+                className="composer-menu"
+                ref={actionMenu}
+                onToggle={(event) => {
+                  if (event.currentTarget.open) permissionMenu.current?.removeAttribute("open");
+                }}
+              >
+                <summary aria-label="添加"><Plus size={18} aria-hidden="true" /></summary>
+                <div className="composer-popover action-popover">
+                  <strong>消息处理</strong>
+                  <button
+                    className={action === "discuss" ? "selected" : ""}
+                    type="button"
+                    onClick={() => { setAction("discuss"); actionMenu.current!.open = false; }}
+                  >
+                    <MessageCircle size={17} aria-hidden="true" />
+                    <span>讨论<small>基于当前研究证据回答</small></span>
+                    {action === "discuss" ? <CheckCircle2 size={16} /> : null}
+                  </button>
+                  {canRevise ? (
+                    <button
+                      className={action === "revise_report" ? "selected" : ""}
+                      type="button"
+                      onClick={() => { setAction("revise_report"); actionMenu.current!.open = false; }}
+                    >
+                      <FilePenLine size={17} aria-hidden="true" />
+                      <span>据此修订报告<small>将本次要求写入新报告版本</small></span>
+                      {action === "revise_report" ? <CheckCircle2 size={16} /> : null}
+                    </button>
+                  ) : null}
+                </div>
+              </details>
+              <details
+                className="composer-menu permission-menu"
+                ref={permissionMenu}
+                onToggle={(event) => {
+                  if (event.currentTarget.open) actionMenu.current?.removeAttribute("open");
+                }}
+              >
+                <summary aria-label={`权限：${selectedPermission.label}`}>
+                  <Gauge size={16} aria-hidden="true" />{selectedPermission.label}
+                </summary>
+                <div className="composer-popover permission-popover">
+                  {permissionOptions.map((option) => {
+                    const PermissionIcon = option.icon;
+                    return (
+                      <button
+                        aria-label={option.label}
+                        className={`${permissionMode === option.value ? "selected " : ""}permission-option-${option.value}`}
+                        key={option.value}
+                        type="button"
+                        onClick={() => { setPermissionMode(option.value); permissionMenu.current!.open = false; }}
+                      >
+                        <PermissionIcon size={17} aria-hidden="true" />
+                        <span>{option.label}<small>{option.description}</small></span>
+                        {permissionMode === option.value ? <CheckCircle2 size={16} /> : null}
+                      </button>
+                    );
+                  })}
+                  <p>该偏好将用于后续扩展；当前研究流程不会申请额外系统权限。</p>
+                </div>
+              </details>
+            </div>
+            <div className="composer-actions-right">
+              {action === "revise_report" ? <span className="composer-action-label"><FilePenLine size={13} />修订报告</span> : null}
+              <button
+                className="composer-send"
+                type="button"
+                onClick={() => void send()}
+                disabled={!content.trim() || pending}
+                aria-label="发送"
+                title="发送"
+              >
+                <Send size={17} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </aside>

@@ -1,7 +1,9 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ResearchConversation } from "./research-conversation";
+
+afterEach(cleanup);
 
 describe("ResearchConversation", () => {
   it("shows an in-message streaming indicator before the first delta arrives", () => {
@@ -88,5 +90,28 @@ describe("ResearchConversation", () => {
     const text = container.textContent ?? "";
     expect(text.indexOf("开始研究")).toBeLessThan(text.indexOf("检索文献来源"));
     expect(text.indexOf("检索文献来源")).toBeLessThan(text.indexOf("任务已经完成"));
+  });
+
+  it("keeps report revision in the desktop-style composer menu", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ResearchConversation
+        messages={[]}
+        operations={[]}
+        pending={false}
+        canRevise
+        reportVersion={2}
+        onSend={onSend}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("添加"));
+    fireEvent.click(screen.getByRole("button", { name: /据此修订报告/ }));
+    fireEvent.change(screen.getByLabelText("给研究助手发送消息"), {
+      target: { value: "补充这项局限" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("补充这项局限", "revise_report"));
   });
 });
