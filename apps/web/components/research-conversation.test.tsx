@@ -114,4 +114,27 @@ describe("ResearchConversation", () => {
 
     await waitFor(() => expect(onSend).toHaveBeenCalledWith("补充这项局限", "revise_report"));
   });
+
+  it("offers the desktop models and reports model changes", () => {
+    const onModelChange = vi.fn();
+    render(
+      <ResearchConversation
+        messages={[]}
+        operations={[]}
+        pending={false}
+        canRevise={false}
+        reportVersion={1}
+        model="deepseek-v4-flash"
+        onModelChange={onModelChange}
+        onSend={vi.fn()}
+      />,
+    );
+
+    const modelPicker = screen.getByRole("combobox");
+    expect(modelPicker).toHaveValue("deepseek-v4-flash");
+    expect(screen.getByRole("option", { name: "V4 Pro" })).toBeInTheDocument();
+
+    fireEvent.change(modelPicker, { target: { value: "deepseek-v4-pro" } });
+    expect(onModelChange).toHaveBeenCalledWith("deepseek-v4-pro");
+  });
 });

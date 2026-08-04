@@ -165,6 +165,34 @@ def test_run_conversation_persists_and_revises_report_with_current_evidence(tmp_
         assert all(item["status"] == "completed" for item in revision_operations)
 
 
+def test_conversation_rejects_unknown_models(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        headers = login(client)
+        project = client.post(
+            "/v1/projects", headers=headers, json={"name": "Model validation"}
+        ).json()
+        run = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=headers,
+            json={"question": "What evidence supports model validation?"},
+        ).json()
+
+        response = client.post(
+            f"/v1/runs/{run['id']}/conversation/messages/stream",
+            headers=headers,
+            json={"content": "Continue", "model": "unknown-model"},
+        )
+
+        assert response.status_code == 422
+
+        supported = client.post(
+            f"/v1/runs/{run['id']}/conversation/messages/stream",
+            headers=headers,
+            json={"content": "Continue", "model": "gpt-5-mini"},
+        )
+        assert supported.status_code == 200
+
+
 def test_project_runs_restore_history_and_streamed_reply_is_persisted(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         headers = login(client)

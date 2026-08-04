@@ -9,11 +9,13 @@ import {
   type ResearchAssistantMessage,
   type ResearchBriefInput,
 } from "../lib/api";
+import { useConversationModel } from "../lib/conversation-model";
 import { NewResearchForm } from "./new-research-form";
 import { RunWorkspaceClient } from "./run-workspace-client";
 
 export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
   const router = useRouter();
+  const [model] = useConversationModel();
   const [loadingProject, setLoadingProject] = useState(Boolean(projectId));
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -47,7 +49,7 @@ export function NewProjectWorkflow({ projectId }: { projectId?: string }) {
           brief.population ? `研究人群：${brief.population}` : "探索性生物医学研究情报",
         );
     await Promise.all(files.map((file) => api.uploadPdf(project.id, file)));
-    const run = await api.createRun(project.id, brief);
+    const run = await api.createRun(project.id, { ...brief, model });
     await api.bootstrapRunConversation(run.id, messages);
     setActiveRunId(run.id);
     if (!projectId) {

@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     deepseek_api_key: str | None = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-pro"
+    openai_api_key: str | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    qwen_api_key: str | None = None
+    qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     @model_validator(mode="after")
     def require_deepseek_for_live_runs(self) -> "Settings":

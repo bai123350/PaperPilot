@@ -28,6 +28,7 @@ export interface ResearchBriefInput {
   date_from?: number;
   date_to?: number;
   study_types?: string[];
+  model?: ConversationModel;
 }
 
 export interface ResearchAssistantMessage {
@@ -47,6 +48,12 @@ export interface RunConversation {
   report_version: number;
   messages: RunConversationMessage[];
 }
+
+export type ConversationModel =
+  | "deepseek-v4-flash"
+  | "deepseek-v4-pro"
+  | "gpt-5-mini"
+  | "qwen-plus";
 
 export type RunOperationStatus = "running" | "completed" | "failed";
 export type RunOperationTaskKind = "research_run" | "discussion" | "report_revision";
@@ -259,10 +266,11 @@ export class PaperPilotApi {
     id: string,
     content: string,
     action: "discuss" | "revise_report" = "discuss",
+    model?: ConversationModel,
   ): Promise<{ message: RunConversationMessage; report_updated: boolean; report_version: number }> {
     return this.authenticated(`/v1/runs/${id}/conversation/messages`, {
       method: "POST",
-      body: JSON.stringify({ contract_version: "1.0", content, action }),
+      body: JSON.stringify({ contract_version: "1.0", content, action, model }),
     });
   }
 
@@ -271,6 +279,7 @@ export class PaperPilotApi {
     content: string,
     onDelta: (content: string) => void,
     appendUser = true,
+    model?: ConversationModel,
   ): Promise<{ message: RunConversationMessage; report_version: number }> {
     const request = async (token: string) => fetch(
       `${this.baseUrl}/v1/runs/${id}/conversation/messages/stream`,
@@ -285,6 +294,7 @@ export class PaperPilotApi {
           contract_version: "1.0",
           content,
           append_user: appendUser,
+          model,
         }),
       },
     );

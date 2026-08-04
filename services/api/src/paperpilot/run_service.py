@@ -23,7 +23,8 @@ from paperpilot.domain.operations import OperationKind, OperationTaskKind, Opera
 from paperpilot.services.pipeline import ResearchPipeline
 from paperpilot.services.operation_recorder import OperationRecorder
 from paperpilot.services.llm_synthesis import LlmReportSynthesizer
-from paperpilot.models.deepseek import DeepSeekModel, ModelProviderError
+from paperpilot.models.deepseek import ModelProviderError
+from paperpilot.models.provider import create_model_client
 from paperpilot.parsing.grobid import GrobidPdfParser
 from paperpilot.parsing.pymupdf import PyMuPdfParser
 from paperpilot.storage.factory import create_object_store
@@ -45,7 +46,7 @@ class RunService:
         pipeline = ResearchPipeline(
             connectors=self._connectors(run.project_id),
             dataset_connectors=self._dataset_connectors(),
-            synthesizer=self._synthesizer(),
+            synthesizer=self._synthesizer(brief.model),
         )
         operation_recorder = OperationRecorder(self.database)
 
@@ -150,15 +151,10 @@ class RunService:
             EncodeDatasetConnector(),
         ]
 
-    def _synthesizer(self):
+    def _synthesizer(self, model=None):
         if self.settings.demo_mode:
             return None
-        model = DeepSeekModel(
-            base_url=self.settings.deepseek_base_url,
-            api_key=self.settings.deepseek_api_key or "",
-            model=self.settings.deepseek_model,
-        )
-        return LlmReportSynthesizer(model)
+        return LlmReportSynthesizer(create_model_client(self.settings, model))
 
     @staticmethod
     def _safe_error(exc: Exception) -> str:

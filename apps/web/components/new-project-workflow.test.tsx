@@ -24,6 +24,7 @@ afterEach(() => {
 
 describe("NewProjectWorkflow", () => {
   it("opens the run inline and synchronizes the App Router project URL", async () => {
+    localStorage.setItem("paperpilot.conversationModel", "gpt-5-mini");
     vi.spyOn(api, "createProject").mockResolvedValue({
       id: "project-1",
       name: "Inline research",
@@ -55,6 +56,10 @@ describe("NewProjectWorkflow", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送研究问题" }));
 
     await waitFor(() => expect(screen.getByTestId("embedded-run")).toHaveTextContent("run-1"));
+    expect(api.createRun).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({ model: "gpt-5-mini" }),
+    );
     expect(routerMock.replace).toHaveBeenCalledWith("/projects/project-1");
   });
 });

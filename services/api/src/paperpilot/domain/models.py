@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
@@ -62,6 +62,12 @@ class ResearchBrief(BaseModel):
     date_from: int | None = Field(default=None, ge=1900, le=2100)
     date_to: int | None = Field(default=None, ge=1900, le=2100)
     study_types: list[str] = Field(default_factory=list)
+    model: Literal[
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "gpt-5-mini",
+        "qwen-plus",
+    ] | None = None
 
     @field_validator("question")
     @classmethod

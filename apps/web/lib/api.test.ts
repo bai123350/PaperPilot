@@ -97,4 +97,31 @@ describe("PaperPilotApi", () => {
       status: "completed",
     }));
   });
+
+  it("sends the selected desktop model with conversation messages", async () => {
+    localStorage.setItem("paperpilot_access_token", "token-1");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        message: {
+          id: "message-1",
+          role: "assistant",
+          content: "reply",
+          evidence_ids: [],
+          report_version: null,
+          created_at: "2026-07-21T00:00:00Z",
+        },
+        report_updated: false,
+        report_version: 1,
+      }), { status: 200 }),
+    );
+    const api = new PaperPilotApi("http://api.test");
+
+    await api.sendRunMessage("run-1", "continue", "discuss", "deepseek-v4-flash");
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      content: "continue",
+      action: "discuss",
+      model: "deepseek-v4-flash",
+    });
+  });
 });

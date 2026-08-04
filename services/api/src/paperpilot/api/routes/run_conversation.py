@@ -27,6 +27,7 @@ from paperpilot.domain.operations import (
     OperationUpdate,
 )
 from paperpilot.models.deepseek import DeepSeekModel, ModelProviderError, ModelResponseError
+from paperpilot.models.provider import ConversationModel, create_model_client
 from paperpilot.services.llm_synthesis import SynthesisPayload
 from paperpilot.services.operation_recorder import OperationRecorder
 
@@ -53,12 +54,14 @@ class SendMessageRequest(BaseModel):
     contract_version: Literal["1.0"] = "1.0"
     content: str = Field(min_length=1, max_length=4000)
     action: Literal["discuss", "revise_report"] = "discuss"
+    model: ConversationModel | None = None
 
 
 class StreamMessageRequest(BaseModel):
     contract_version: Literal["1.0"] = "1.0"
     content: str = Field(min_length=1, max_length=4000)
     append_user: bool = True
+    model: ConversationModel | None = None
 
 
 class SendMessageResponse(BaseModel):
@@ -358,11 +361,7 @@ async def stream_message(
 
                     source = demo_chunks()
                 else:
-                    model = DeepSeekModel(
-                        api_key=request.app.state.settings.deepseek_api_key,
-                        base_url=request.app.state.settings.deepseek_base_url,
-                        model=request.app.state.settings.deepseek_model,
-                    )
+                    model = create_model_client(request.app.state.settings, payload.model)
                     context = {
                         "run": {
                             "status": current_run.status,
@@ -517,11 +516,7 @@ async def _model_response(
     evidence: list[EvidenceEntity],
     settings: object,
 ) -> tuple[GroundedReply, dict | None]:
-    model = DeepSeekModel(
-        api_key=settings.deepseek_api_key,
-        base_url=settings.deepseek_base_url,
-        model=settings.deepseek_model,
-    )
+    model = create_model_client(settings, payload.model)
     try:
         evidence_payload = [
             {

@@ -14,7 +14,7 @@ import {
   UserRound,
 } from "lucide-react";
 
-import type { RunConversationMessage, RunOperation } from "../lib/api";
+import type { ConversationModel, RunConversationMessage, RunOperation } from "../lib/api";
 import { mergeRunTimeline } from "../lib/run-timeline";
 import { OperationCard } from "./operation-card";
 
@@ -25,6 +25,8 @@ interface ResearchConversationProps {
   canRevise: boolean;
   reportVersion: number;
   error?: string | null;
+  model?: ConversationModel;
+  onModelChange?: (model: ConversationModel) => void;
   onSend: (content: string, action: "discuss" | "revise_report") => Promise<void>;
   onRetry?: () => void;
 }
@@ -44,6 +46,8 @@ export function ResearchConversation({
   canRevise,
   reportVersion,
   error,
+  model = "deepseek-v4-pro",
+  onModelChange = () => undefined,
   onSend,
   onRetry,
 }: ResearchConversationProps) {
@@ -58,6 +62,7 @@ export function ResearchConversation({
   });
   const timeline = mergeRunTimeline(messages, operations);
   const selectedPermission = permissionOptions.find((option) => option.value === permissionMode)!;
+  const canSwitchDeepSeekModel = model === "deepseek-v4-flash" || model === "deepseek-v4-pro";
 
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
@@ -206,6 +211,20 @@ export function ResearchConversation({
             </div>
             <div className="composer-actions-right">
               {action === "revise_report" ? <span className="composer-action-label"><FilePenLine size={13} />修订报告</span> : null}
+              {canSwitchDeepSeekModel ? (
+                <label className="composer-model">
+                  <span className="visually-hidden">模型</span>
+                  <select
+                    aria-label="当前使用的模型"
+                    value={model}
+                    disabled={pending}
+                    onChange={(event) => onModelChange(event.target.value as ConversationModel)}
+                  >
+                    <option value="deepseek-v4-flash">V4 Flash</option>
+                    <option value="deepseek-v4-pro">V4 Pro</option>
+                  </select>
+                </label>
+              ) : null}
               <button
                 className="composer-send"
                 type="button"
