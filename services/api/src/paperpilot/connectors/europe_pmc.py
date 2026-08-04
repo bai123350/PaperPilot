@@ -14,10 +14,16 @@ class EuropePmcConnector:
         self.limit = limit
 
     async def search(self, brief: ResearchBrief) -> list[Paper]:
+        query = brief.question
+        if brief.date_from and brief.date_to:
+            query = (
+                f"({query}) AND FIRST_PDATE:[{brief.date_from}-01-01 TO "
+                f"{brief.date_to}-12-31]"
+            )
         response = await self.client.get(
             self.endpoint,
             params={
-                "query": brief.question,
+                "query": query,
                 "format": "json",
                 "pageSize": self.limit,
                 "resultType": "core",

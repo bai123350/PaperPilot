@@ -44,6 +44,28 @@ describe("ResearchConversation", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("研究对话暂时不可用");
   });
 
+  it("turns a failed run composer into a retry action", async () => {
+    const onRetry = vi.fn().mockResolvedValue(undefined);
+    const onSend = vi.fn();
+    render(
+      <ResearchConversation
+        messages={[]}
+        operations={[]}
+        pending={false}
+        canRevise={false}
+        reportVersion={1}
+        onSend={onSend}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByLabelText("给研究助手发送消息")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "重新运行研究" }));
+
+    await waitFor(() => expect(onRetry).toHaveBeenCalledOnce());
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("interleaves complete operation cards with conversation messages", () => {
     const { container } = render(
       <ResearchConversation

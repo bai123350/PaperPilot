@@ -169,6 +169,38 @@ def test_start_run_returns_the_persisted_failed_state(tmp_path: Path) -> None:
         assert response.json()["error"] == "Research run failed"
 
 
+def test_retry_run_returns_the_persisted_failed_state(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        headers = login(client)
+        project = client.post(
+            "/v1/projects", headers=headers, json={"name": "Retry failure handling"}
+        ).json()
+        run = client.post(
+            f"/v1/projects/{project['id']}/runs",
+            headers=headers,
+            json={"question": "What evidence supports robust external biomarker validation?"},
+        ).json()
+
+        with client.app.state.database.session() as session:
+            stored = session.get(RunEntity, run["id"])
+            stored.status = "failed"
+            stored.error = "Research run failed"
+
+        def fail_after_persisting(run_id: str) -> None:
+            with client.app.state.database.session() as session:
+                stored = session.get(RunEntity, run_id)
+                stored.status = "failed"
+                stored.error = "Research run failed"
+            raise ValueError("no evidence")
+
+        client.app.state.run_service.execute = fail_after_persisting
+        response = client.post(f"/v1/runs/{run['id']}/retry", headers=headers)
+
+        assert response.status_code == 202
+        assert response.json()["status"] == "failed"
+        assert response.json()["error"] == "Research run failed"
+
+
 def test_create_run_accepts_a_concise_research_question(tmp_path: Path) -> None:
     with build_client(tmp_path) as client:
         headers = login(client)

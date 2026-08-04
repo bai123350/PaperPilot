@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from typing import Protocol
+from datetime import datetime, timezone
 
 import httpx
 
@@ -67,16 +68,22 @@ class ReportSynthesizer(Protocol):
     ) -> dict: ...
 
 
+class ResearchPlanner(Protocol):
+    async def build_search_query(self, brief: ResearchBrief) -> str: ...
+
+
 class ResearchPipeline:
     def __init__(
         self,
         connectors: list[LiteratureConnector],
         dataset_connectors: list[DatasetConnector] | None = None,
         synthesizer: ReportSynthesizer | None = None,
+        planner: ResearchPlanner | None = None,
     ) -> None:
         self.connectors = connectors
         self.dataset_connectors = dataset_connectors or []
         self.synthesizer = synthesizer
+        self.planner = planner
 
     async def run(
         self,
@@ -97,23 +104,44 @@ class ResearchPipeline:
                 stage=RunStage.PLANNING,
             )
         )
+        search_brief = brief
+        if self.planner:
+            try:
+                query = await self.planner.build_search_query(brief)
+            except Exception:
+                operations.fail(operation_id, "provider_unavailable")
+                raise
+            current_year = datetime.now(timezone.utc).year
+            search_brief = brief.model_copy(
+                update={
+                    "question": query,
+                    "date_from": brief.date_from or 2010,
+                    "date_to": brief.date_to or current_year,
+                }
+            )
         operations.complete(operation_id)
 
         on_stage(RunStage.SEARCHING)
-        for connector in self.connectors:
-            operation_id = operations.start(
-                OperationUpdate(
-                    task_kind=OperationTaskKind.RESEARCH_RUN,
-                    operation_kind=OperationKind.SEARCH_SOURCE,
-                    stage=RunStage.SEARCHING,
-                    metrics={"source_count": 1},
-                )
+        operation_id = operations.start(
+            OperationUpdate(
+                task_kind=OperationTaskKind.RESEARCH_RUN,
+                operation_kind=OperationKind.SEARCH_SOURCE,
+                stage=RunStage.SEARCHING,
+                metrics={"source_count": len(self.connectors)},
             )
-            found: list[Paper] = []
+        )
+        successful_sources = 0
+        failed_sources = 0
+        literature_brief = search_brief.model_copy(
+            update={"keywords": [], "population": None, "intervention": None}
+        )
+        for connector in self.connectors:
             try:
-                found = await connector.search(brief)
+                found = await connector.search(literature_brief)
                 papers.extend(found)
+                successful_sources += 1
             except httpx.HTTPError as exc:
+                failed_sources += 1
                 logger.warning(
                     "Literature connector unavailable",
                     extra={
@@ -121,22 +149,37 @@ class ResearchPipeline:
                         "error_type": type(exc).__name__,
                     },
                 )
-            operations.complete(operation_id, {"candidate_count": len(found)})
+        if self.connectors and successful_sources == 0:
+            operations.fail(operation_id, "literature_sources_unavailable")
+            raise ValueError("All literature sources were unavailable")
+        operations.complete(
+            operation_id,
+            {
+                "candidate_count": len(papers),
+                "succeeded_source_count": successful_sources,
+                "failed_source_count": failed_sources,
+            },
+        )
 
-        for connector in self.dataset_connectors:
-            operation_id = operations.start(
+        dataset_operation_id = None
+        if self.dataset_connectors:
+            dataset_operation_id = operations.start(
                 OperationUpdate(
                     task_kind=OperationTaskKind.RESEARCH_RUN,
                     operation_kind=OperationKind.SEARCH_DATASET_SOURCE,
                     stage=RunStage.SEARCHING,
-                    metrics={"dataset_source_count": 1},
+                    metrics={"dataset_source_count": len(self.dataset_connectors)},
                 )
             )
-            found_datasets: list[PublicDataset] = []
+        successful_dataset_sources = 0
+        failed_dataset_sources = 0
+        for connector in self.dataset_connectors:
             try:
-                found_datasets = await connector.search(brief)
+                found_datasets = await connector.search(search_brief)
                 related_datasets.extend(found_datasets)
+                successful_dataset_sources += 1
             except (httpx.HTTPError, ValueError) as exc:
+                failed_dataset_sources += 1
                 logger.warning(
                     "Dataset connector unavailable",
                     extra={
@@ -144,7 +187,15 @@ class ResearchPipeline:
                         "error_type": type(exc).__name__,
                     },
                 )
-            operations.complete(operation_id, {"dataset_count": len(found_datasets)})
+        if dataset_operation_id:
+            operations.complete(
+                dataset_operation_id,
+                {
+                    "dataset_count": len(related_datasets),
+                    "succeeded_source_count": successful_dataset_sources,
+                    "failed_source_count": failed_dataset_sources,
+                },
+            )
 
         related_datasets = self._deduplicate_datasets(related_datasets)[:30]
 

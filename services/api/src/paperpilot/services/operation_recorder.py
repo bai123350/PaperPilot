@@ -25,6 +25,8 @@ ALLOWED_METRICS = {
     "citation_count",
     "report_version",
     "duration_ms",
+    "succeeded_source_count",
+    "failed_source_count",
 }
 
 OPERATION_TITLES = {
@@ -52,6 +54,7 @@ SAFE_ERRORS = {
     "invalid_model_response": "模型返回未通过结构化校验。",
     "no_evidence": "未找到可支持当前任务的证据。",
     "run_failed": "研究任务未能完成，可稍后重试。",
+    "literature_sources_unavailable": "所有文献来源均暂时不可用，请稍后重试。",
 }
 
 
@@ -158,12 +161,22 @@ class OperationRecorder:
     ) -> str:
         if status is OperationStatus.RUNNING:
             return {
-                OperationKind.SEARCH_SOURCE: "正在检索一个文献来源。",
-                OperationKind.SEARCH_DATASET_SOURCE: "正在检索一个公共数据来源。",
+                OperationKind.SEARCH_SOURCE: (
+                    f"正在检索 {metrics.get('source_count', 1)} 个文献来源。"
+                ),
+                OperationKind.SEARCH_DATASET_SOURCE: (
+                    f"正在检索 {metrics.get('dataset_source_count', 1)} 个公共数据来源。"
+                ),
                 OperationKind.LOOKUP_EVIDENCE: "正在当前研究运行中定位相关证据。",
             }.get(kind, f"正在{OPERATION_TITLES[kind]}。")
         if kind is OperationKind.SEARCH_SOURCE:
-            return f"已完成文献来源检索，发现 {metrics.get('candidate_count', 0)} 篇候选文献。"
+            succeeded = metrics.get("succeeded_source_count", metrics.get("source_count", 0))
+            failed = metrics.get("failed_source_count", 0)
+            failure_note = f"，{failed} 个来源失败" if failed else ""
+            return (
+                f"已完成 {succeeded} 个文献来源检索{failure_note}，"
+                f"发现 {metrics.get('candidate_count', 0)} 篇候选文献。"
+            )
         if kind is OperationKind.SEARCH_DATASET_SOURCE:
             return f"已完成公共数据检索，发现 {metrics.get('dataset_count', 0)} 个相关数据集。"
         if kind is OperationKind.DEDUPLICATE:

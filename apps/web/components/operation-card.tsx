@@ -45,6 +45,8 @@ const statusLabels = {
 
 const metricLabels: Record<string, (value: number) => string> = {
   source_count: (value) => `${value} 个文献来源`,
+  succeeded_source_count: (value) => `${value} 个来源成功`,
+  failed_source_count: (value) => `${value} 个来源失败`,
   candidate_count: (value) => `${value} 篇候选文献`,
   dataset_count: (value) => `${value} 个相关数据集`,
   dataset_source_count: (value) => `${value} 个数据来源`,

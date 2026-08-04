@@ -17,13 +17,19 @@ class CrossrefConnector:
         self.limit = limit
 
     async def search(self, brief: ResearchBrief) -> list[Paper]:
+        params = {
+            "query.bibliographic": brief.question,
+            "rows": self.limit,
+            "select": "DOI,title,abstract,published,author,container-title,URL",
+        }
+        if brief.date_from and brief.date_to:
+            params["filter"] = (
+                f"from-pub-date:{brief.date_from}-01-01,"
+                f"until-pub-date:{brief.date_to}-12-31"
+            )
         response = await self.client.get(
             self.endpoint,
-            params={
-                "query.bibliographic": brief.question,
-                "rows": self.limit,
-                "select": "DOI,title,abstract,published,author,container-title,URL",
-            },
+            params=params,
             headers={"User-Agent": "PaperPilot/0.1 (mailto:researcher@example.com)"},
         )
         response.raise_for_status()

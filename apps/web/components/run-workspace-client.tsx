@@ -139,6 +139,19 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
     return () => controller.abort();
   }, [runId]);
 
+  useEffect(() => {
+    if (run?.status !== "completed" || report) return;
+    let active = true;
+    void api.getReport(runId)
+      .then((rawReport) => {
+        if (active) setReport(mapReport(rawReport as Parameters<typeof mapReport>[0]));
+      })
+      .catch((reason) => {
+        if (active) setLoadError(reason instanceof Error ? reason.message : "报告加载失败");
+      });
+    return () => { active = false; };
+  }, [report, run?.status, runId]);
+
   if (loadError) return <div className="error-banner">{loadError}</div>;
   if (!run) return <div className="run-loading"><span /><p>正在读取研究状态</p></div>;
   return (
@@ -203,6 +216,9 @@ export function RunWorkspaceClient({ runId }: { runId: string }) {
     try {
       const nextRun = await api.retryRun(runId);
       setRun(nextRun);
+      const conversation = await api.getRunConversation(runId);
+      setMessages(conversation.messages);
+      setReportVersion(conversation.report_version);
       const nextOperations = await loadRunOperations(runId);
       if (nextOperations) setOperations(nextOperations);
     } catch (reason) {

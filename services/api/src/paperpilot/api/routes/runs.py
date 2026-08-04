@@ -24,7 +24,6 @@ from paperpilot.database import (
 from paperpilot.domain.models import ResearchBrief, RunStatus
 from paperpilot.domain.models import Report
 from paperpilot.domain.operations import RunOperation
-from paperpilot.models.deepseek import ModelProviderError
 from paperpilot.services.markdown_export import render_markdown
 from paperpilot.services.operation_recorder import operation_payload
 
@@ -176,7 +175,8 @@ def retry_run(
     if request.app.state.settings.task_always_eager:
         try:
             request.app.state.run_service.execute(run.id)
-        except ModelProviderError:
+        except Exception:
+            # RunService persists a safe failed state before propagating the cause.
             pass
         session.expire_all()
         run = owned_run(session, user.id, run.id)

@@ -57,6 +57,20 @@ class UnavailableConnector:
         raise httpx.ConnectError("source unavailable")
 
 
+class StubPlanner:
+    async def build_search_query(self, brief: ResearchBrief) -> str:
+        return '(glaucoma) AND ("single cell" OR scRNA-seq) AND (macrophage)'
+
+
+class QueryCapturingConnector(StubConnector):
+    def __init__(self) -> None:
+        self.brief: ResearchBrief | None = None
+
+    async def search(self, brief: ResearchBrief) -> list[Paper]:
+        self.brief = brief
+        return await super().search(brief)
+
+
 class StubSynthesizer:
     async def synthesize(self, brief, papers, evidence):
         evidence_ids = [item.id for item in evidence]
@@ -162,12 +176,56 @@ async def test_pipeline_uses_the_configured_evidence_synthesizer() -> None:
 
 
 async def test_pipeline_continues_when_one_literature_source_is_unavailable() -> None:
+    operations = OperationCollector()
     pipeline = ResearchPipeline(connectors=[UnavailableConnector(), StubConnector()])
 
     report = await pipeline.run(
         ResearchBrief(question="What evidence supports robust external biomarker validation?"),
         on_stage=lambda _: None,
+        on_operation=operations,
     )
 
     assert report.papers[0].source == "stub"
     assert report.evidence
+    search_operations = [
+        (update, metrics)
+        for update, metrics in operations.completed
+        if update.operation_kind.value == "search_source"
+    ]
+    assert len(search_operations) == 1
+    assert search_operations[0][1]["succeeded_source_count"] == 1
+    assert search_operations[0][1]["failed_source_count"] == 1
+
+
+async def test_pipeline_uses_planned_query_and_desktop_default_date_range() -> None:
+    connector = QueryCapturingConnector()
+    pipeline = ResearchPipeline(connectors=[connector], planner=StubPlanner())
+
+    await pipeline.run(
+        ResearchBrief(question="青光眼单细胞中的巨噬细胞研究"),
+        on_stage=lambda _: None,
+    )
+
+    assert connector.brief is not None
+    assert connector.brief.question == '(glaucoma) AND ("single cell" OR scRNA-seq) AND (macrophage)'
+    assert connector.brief.date_from == 2010
+    assert connector.brief.date_to is not None
+    assert connector.brief.keywords == []
+
+
+async def test_pipeline_fails_search_when_every_literature_source_is_unavailable() -> None:
+    operations = OperationCollector()
+    pipeline = ResearchPipeline(connectors=[UnavailableConnector(), UnavailableConnector()])
+
+    try:
+        await pipeline.run(
+            ResearchBrief(question="What evidence supports robust external biomarker validation?"),
+            on_stage=lambda _: None,
+            on_operation=operations,
+        )
+    except ValueError as exc:
+        assert str(exc) == "All literature sources were unavailable"
+    else:
+        raise AssertionError("pipeline should fail when every literature source is unavailable")
+
+    assert operations.failed == ["literature_sources_unavailable"]

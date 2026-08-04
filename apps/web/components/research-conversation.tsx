@@ -9,6 +9,7 @@ import {
   Hand,
   MessageCircle,
   Plus,
+  RefreshCcw,
   Send,
   ShieldCheck,
   UserRound,
@@ -76,6 +77,10 @@ export function ResearchConversation({
     const value = content.trim();
     if (!value || pending) return;
     setContent("");
+    if (onRetry && /^(重新跑|重新运行|重新开始|重试|再跑一次|retry)$/i.test(value)) {
+      await onRetry();
+      return;
+    }
     await onSend(value, action);
     setAction("discuss");
   }
@@ -129,6 +134,15 @@ export function ResearchConversation({
 
       <div className="conversation-compose">
         {error ? <p className="conversation-error" role="alert">{error}</p> : null}
+        {onRetry ? (
+          <div className="conversation-retry-notice" role="status">
+            <span>研究任务已停止，请重试后继续对话。</span>
+            <button type="button" onClick={onRetry} disabled={pending}>
+              <RefreshCcw size={14} aria-hidden="true" />
+              重新运行研究
+            </button>
+          </div>
+        ) : null}
         <div className="composer-input">
           <textarea
             value={content}
@@ -141,8 +155,9 @@ export function ResearchConversation({
             }}
             rows={3}
             maxLength={4000}
-            placeholder={canRevise ? "追问证据，或说明希望如何完善报告" : "补充研究要求或询问当前进度"}
+            placeholder={onRetry ? "请先重新运行研究任务" : canRevise ? "追问证据，或说明希望如何完善报告" : "补充研究要求或询问当前进度"}
             aria-label="给研究助手发送消息"
+            disabled={Boolean(onRetry)}
           />
           <div className="composer-actions">
             <div className="composer-actions-left">
@@ -229,7 +244,7 @@ export function ResearchConversation({
                 className="composer-send"
                 type="button"
                 onClick={() => void send()}
-                disabled={!content.trim() || pending}
+                disabled={!content.trim() || pending || Boolean(onRetry)}
                 aria-label="发送"
                 title="发送"
               >

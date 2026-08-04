@@ -3,12 +3,12 @@ import { expect, test } from "@playwright/test";
 test("creates an evidence report and opens its source record", async ({ page }, testInfo) => {
   await page.goto("/");
   await expect(page.getByRole("navigation", { name: "主导航" })).toBeVisible();
-  await page.getByRole("link", { name: "新建研究" }).first().click();
+  await page.locator('a[href="/projects/new"]').first().click();
 
   await page.getByLabel("给 PaperPilot 发送研究问题").fill(
     "What evidence supports circulating biomarkers for predicting treatment response?",
   );
-  await page.getByText("研究设置与 PDF").click();
+  await page.getByText("研究设置与 PDF", { exact: true }).click();
   await page.getByLabel("研究人群").fill("Adults receiving systemic therapy");
   await page.getByRole("button", { name: "发送研究问题" }).click();
 

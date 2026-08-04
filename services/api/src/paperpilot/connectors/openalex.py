@@ -16,9 +16,15 @@ class OpenAlexConnector:
         self.limit = limit
 
     async def search(self, brief: ResearchBrief) -> list[Paper]:
+        params: dict[str, str | int] = {"search": brief.question, "per-page": self.limit}
+        if brief.date_from and brief.date_to:
+            params["filter"] = (
+                f"from_publication_date:{brief.date_from}-01-01,"
+                f"to_publication_date:{brief.date_to}-12-31"
+            )
         response = await self.client.get(
             self.endpoint,
-            params={"search": brief.question, "per-page": self.limit},
+            params=params,
         )
         response.raise_for_status()
         return [self._paper(record) for record in response.json().get("results", []) if record.get("display_name")]

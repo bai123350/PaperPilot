@@ -15,6 +15,7 @@ async def test_pubmed_search_fetches_summaries_and_normalizes_identifiers() -> N
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("esearch.fcgi"):
             assert "circulating biomarkers" in request.url.params["term"]
+            assert '"2018/01/01"[Date - Publication]' in request.url.params["term"]
             return httpx.Response(200, json={"esearchresult": {"idlist": ["12345678"]}})
         return httpx.Response(
             200,
@@ -42,7 +43,11 @@ async def test_pubmed_search_fetches_summaries_and_normalizes_identifiers() -> N
     )
 
     papers = await connector.search(
-        ResearchBrief(question="What is the evidence for circulating biomarkers in treatment response?")
+        ResearchBrief(
+            question="What is the evidence for circulating biomarkers in treatment response?",
+            date_from=2018,
+            date_to=2025,
+        )
     )
 
     assert len(papers) == 1
@@ -70,11 +75,19 @@ async def test_europe_pmc_maps_open_access_results() -> None:
             ]
         }
     }
-    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)))
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "FIRST_PDATE:[2019-01-01 TO 2025-12-31]" in request.url.params["query"]
+        return httpx.Response(200, json=payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     connector = EuropePmcConnector(client=client)
 
     papers = await connector.search(
-        ResearchBrief(question="How well do circulating biomarkers predict treatment response?")
+        ResearchBrief(
+            question="How well do circulating biomarkers predict treatment response?",
+            date_from=2019,
+            date_to=2025,
+        )
     )
 
     assert papers[0].source == "europe_pmc"
@@ -99,10 +112,20 @@ async def test_crossref_skips_incomplete_records_without_losing_valid_results() 
             ]
         }
     }
-    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)))
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["filter"] == (
+            "from-pub-date:2020-01-01,until-pub-date:2025-12-31"
+        )
+        return httpx.Response(200, json=payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
     papers = await CrossrefConnector(client=client).search(
-        ResearchBrief(question="Which prospective cohorts validate treatment response biomarkers?")
+        ResearchBrief(
+            question="Which prospective cohorts validate treatment response biomarkers?",
+            date_from=2020,
+            date_to=2025,
+        )
     )
 
     assert len(papers) == 1
@@ -125,10 +148,20 @@ async def test_openalex_reconstructs_abstract_and_pmid() -> None:
             }
         ]
     }
-    client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload)))
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["filter"] == (
+            "from_publication_date:2015-01-01,to_publication_date:2025-12-31"
+        )
+        return httpx.Response(200, json=payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
     papers = await OpenAlexConnector(client=client).search(
-        ResearchBrief(question="What external validation exists for response biomarkers?")
+        ResearchBrief(
+            question="What external validation exists for response biomarkers?",
+            date_from=2015,
+            date_to=2025,
+        )
     )
 
     assert papers[0].abstract == "External validation succeeded"

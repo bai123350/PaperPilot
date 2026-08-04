@@ -21,9 +21,38 @@ class SynthesisPayload(BaseModel):
     recommendations: Annotated[list[Recommendation], Field(min_length=3, max_length=3)]
 
 
+class SearchQueryPayload(BaseModel):
+    query: Annotated[str, Field(min_length=1, max_length=500)]
+
+
 class LlmReportSynthesizer:
     def __init__(self, model: JsonModel) -> None:
         self.model = model
+
+    async def build_search_query(self, brief: ResearchBrief) -> str:
+        request_payload = {
+            "research_brief": brief.model_dump(mode="json", exclude_none=True),
+            "effective_publication_range": {
+                "from": brief.date_from or 2010,
+                "to": brief.date_to,
+            },
+            "output_schema": SearchQueryPayload.model_json_schema(),
+        }
+        candidate = await self.model.complete_json(self._search_prompt(), request_payload)
+        query = self._parse_search_query(candidate)
+        if query is not None:
+            return query
+
+        repaired = await self.model.complete_json(
+            self._search_correction_prompt(),
+            {
+                "candidate": candidate,
+                "research_question": brief.question,
+                "user_keywords": brief.keywords,
+                "output_schema": SearchQueryPayload.model_json_schema(),
+            },
+        )
+        return self._parse_search_query(repaired) or self._fallback_search_query(brief)
 
     async def synthesize(
         self,
@@ -108,3 +137,42 @@ class LlmReportSynthesizer:
             "exactly three recommendations, and cite only evidence IDs present in the supplied evidence list. "
             "Do not discuss the correction and do not wrap the JSON in Markdown."
         )
+
+    @staticmethod
+    def _search_prompt() -> str:
+        return (
+            "You are a biomedical literature search expert. Convert the research brief into one concise "
+            "English Boolean query that works across Europe PMC, PubMed, OpenAlex, and Crossref. Use core "
+            "concepts with AND/OR. Do not use database-specific field or date syntax because connectors "
+            "apply dates separately. Use only concepts from the question, PICO, or user keywords and do "
+            "not broaden them. Return JSON only with exactly one query field; do not answer the question."
+        )
+
+    @staticmethod
+    def _search_correction_prompt() -> str:
+        return (
+            "Repair candidate into one cross-database English Boolean literature query without adding new "
+            "concepts. Return JSON only in the exact form {\"query\":\"(concept OR synonym) AND "
+            "(concept)\"}. The query must be a single line."
+        )
+
+    @staticmethod
+    def _parse_search_query(payload: dict) -> str | None:
+        try:
+            query = SearchQueryPayload.model_validate(payload).query
+        except ValidationError:
+            return None
+        normalized = " ".join(query.strip().strip("`").split())
+        return normalized if normalized and len(normalized) <= 500 else None
+
+    @staticmethod
+    def _fallback_search_query(brief: ResearchBrief) -> str:
+        terms = [*brief.keywords]
+        terms.extend(
+            value
+            for value in (brief.population, brief.intervention)
+            if value and value.strip()
+        )
+        if not terms:
+            return brief.question.strip()
+        return " AND ".join(f'\"{term.strip().replace(chr(34), "")}\"' for term in terms)

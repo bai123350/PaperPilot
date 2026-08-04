@@ -76,7 +76,7 @@ def test_recorder_persists_safe_ordered_operation_transitions(tmp_path: Path) ->
     assert [item.sequence for item in operations] == [1, 2]
     assert operations[0].status == OperationStatus.COMPLETED.value
     assert operations[0].title == "检索文献来源"
-    assert operations[0].summary == "已完成文献来源检索，发现 42 篇候选文献。"
+    assert operations[0].summary == "已完成 1 个文献来源检索，发现 42 篇候选文献。"
     assert operations[0].metrics == {
         "source_count": 1,
         "candidate_count": 42,

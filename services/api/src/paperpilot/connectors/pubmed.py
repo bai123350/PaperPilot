@@ -73,4 +73,10 @@ class PubMedConnector:
         parts.extend(brief.keywords)
         if brief.population:
             parts.append(brief.population)
-        return " AND ".join(f"({part})" for part in parts if part.strip())
+        query = " AND ".join(f"({part})" for part in parts if part.strip())
+        if brief.date_from and brief.date_to:
+            query += (
+                f' AND ("{brief.date_from}/01/01"[Date - Publication] : '
+                f'"{brief.date_to}/12/31"[Date - Publication])'
+            )
+        return query

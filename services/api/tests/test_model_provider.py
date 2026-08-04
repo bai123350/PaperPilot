@@ -268,6 +268,47 @@ class InvalidPayloadModel:
         return self.payload
 
 
+class SearchPlanningModel:
+    def __init__(self, responses: list[dict]) -> None:
+        self.responses = responses
+        self.calls: list[tuple[str, dict]] = []
+
+    async def complete_json(self, system_prompt: str, payload: dict) -> dict:
+        self.calls.append((system_prompt, payload))
+        return self.responses.pop(0)
+
+
+async def test_synthesizer_builds_cross_database_search_query() -> None:
+    model = SearchPlanningModel(
+        [{"query": '(glaucoma) AND ("single cell" OR scRNA-seq) AND (macrophage)'}]
+    )
+    synthesizer = LlmReportSynthesizer(model)
+
+    query = await synthesizer.build_search_query(
+        ResearchBrief(question="青光眼单细胞中的巨噬细胞研究")
+    )
+
+    assert query == '(glaucoma) AND ("single cell" OR scRNA-seq) AND (macrophage)'
+    assert model.calls[0][1]["effective_publication_range"]["from"] == 2010
+
+
+async def test_synthesizer_repairs_invalid_search_query_payload() -> None:
+    model = SearchPlanningModel(
+        [
+            {"unexpected": ["glaucoma", "macrophage"]},
+            {"query": "(glaucoma) AND (macrophage)"},
+        ]
+    )
+    synthesizer = LlmReportSynthesizer(model)
+
+    query = await synthesizer.build_search_query(
+        ResearchBrief(question="青光眼中的巨噬细胞研究")
+    )
+
+    assert query == "(glaucoma) AND (macrophage)"
+    assert len(model.calls) == 2
+
+
 class CorrectingPayloadModel:
     def __init__(self, evidence_id: str) -> None:
         self.evidence_id = evidence_id

@@ -57,10 +57,12 @@ class RunService:
                 else self.model_settings_store.resolve(session, run.project.user_id)
             )
 
+        research_model = self._synthesizer(brief.model, stored_model_settings)
         pipeline = ResearchPipeline(
             connectors=self._connectors(run.project_id),
             dataset_connectors=self._dataset_connectors(),
-            synthesizer=self._synthesizer(brief.model, stored_model_settings),
+            synthesizer=research_model,
+            planner=research_model,
         )
         operation_recorder = OperationRecorder(self.database)
 
